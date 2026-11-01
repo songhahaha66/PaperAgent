@@ -1,6 +1,4 @@
 """Copied into the sandbox. No PaperAgent imports or credentials here."""
-import hashlib
-import json
 import os
 from pathlib import Path
 

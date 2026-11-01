@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
-from typing import Optional, List
+from typing import Literal, Optional, List
 from datetime import datetime
 from ai_system.config.generation import GenerationSettings
 
@@ -18,16 +18,13 @@ class UserResponse(UserBase):
     id: int
     created_at: datetime
     is_active: bool
-    
+
     class Config:
         from_attributes = True
 
 class Token(BaseModel):
     access_token: str
     token_type: str
-
-class TokenData(BaseModel):
-    email: Optional[str] = None
 
 
 class PasskeyLoginOptionsRequest(BaseModel):
@@ -66,18 +63,10 @@ class PasskeyCredentialResponse(BaseModel):
 class PasskeyUpdateRequest(BaseModel):
     name: str
 
-class SystemConfigResponse(BaseModel):
-    id: int
-    is_allow_register: bool
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
 
 # ModelConfig相关schemas
 class ModelConfigBase(BaseModel):
-    type: str  # brain(中枢大脑), code(代码实验), writing(论文写作)
+    type: Literal["brain", "code", "writing"]
     model_id: str
     base_url: str
 
@@ -102,7 +91,7 @@ class ModelConfigResponse(ModelConfigBase):
     is_active: bool
     created_at: datetime
     # 注意：响应中不包含api_key，确保安全性
-    
+
     class Config:
         from_attributes = True
 
@@ -129,7 +118,7 @@ class PaperTemplateResponse(PaperTemplateBase):
     created_at: datetime
     updated_at: datetime
     created_by: int
-    
+
     class Config:
         from_attributes = True
 
@@ -173,7 +162,7 @@ class WorkResponse(WorkBase):
     created_at: datetime
     updated_at: datetime
     created_by: int
-    
+
     class Config:
         from_attributes = True
 
@@ -186,41 +175,9 @@ class WorkListResponse(BaseModel):
 
 # 简化后的聊天系统相关schemas
 
-class ChatSessionCreateRequest(BaseModel):
-    """创建聊天会话请求"""
-    work_id: str
-    system_type: str = "brain"  # 统一使用brain类型
-    title: Optional[str] = None
-
-class ChatSessionResponse(BaseModel):
-    """聊天会话响应"""
-    id: int
-    session_id: str
-    work_id: str
-    system_type: str
-    title: Optional[str]
-    status: str
-    created_at: datetime
-    updated_at: datetime
-    created_by: int
-    
-    class Config:
-        from_attributes = True
 
 # JSON格式的聊天记录响应（从JSON文件读取）
-class ChatHistoryResponse(BaseModel):
-    """聊天记录响应"""
-    work_id: str
-    messages: List[dict]  # JSON格式的消息列表
-    context: dict  # 工作上下文
-    
-    class Config:
-        from_attributes = True
 
-class ChatStreamRequest(BaseModel):
-    """流式聊天请求"""
-    problem: str
-    model: Optional[str] = None
 
 # 附件相关schemas
 class AttachmentInfo(BaseModel):

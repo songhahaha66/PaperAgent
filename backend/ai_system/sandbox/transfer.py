@@ -67,8 +67,6 @@ class WorkspaceTransfer:
         self.content = ContentStore(fs.root, settings.max_file_bytes)
         self.seen=None
 
-    def local_inputs(self):
-        return {p:bounded_hash(source,self.settings.max_file_bytes) for p,source in input_files(self.fs,compiler=self.compiler,verified_snapshot=self.verified_snapshot,names=self.input_names).items()}
 
     async def sync_inputs(self, run_id=None):
         sources=({name:self.fs.run_dir(run_id)/'inputs'/name

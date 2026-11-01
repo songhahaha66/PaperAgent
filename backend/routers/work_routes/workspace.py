@@ -1,13 +1,11 @@
 from services.file_services.workspace_layout import workspace_path
-from fastapi import BackgroundTasks, APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, Form
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from database.database import get_db
 from auth.auth import get_current_user
 from services import crud
 from services.file_services.workspace_files import workspace_file_service
-from urllib.parse import unquote
-import asyncio
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -26,7 +24,7 @@ async def list_workspace_files(
     """列出工作空间中的文件"""
     try:
         _require_workspace_access(db, work_id, current_user)
-        
+
         return workspace_file_service.list_files(work_id, path)
     except HTTPException:
         raise
@@ -90,7 +88,7 @@ async def get_workspace_image(
     try:
         _require_workspace_access(db, work_id, current_user)
         db.close()
-        
+
         return workspace_file_service.file_response(work_id, file_path, image=True)
 
     except HTTPException:
@@ -112,7 +110,7 @@ async def write_workspace_file(
     """写入文件到工作空间"""
     try:
         _require_workspace_access(db, work_id, current_user)
-        
+
         return workspace_file_service.write_file(work_id, file_path, content)
     except HTTPException:
         raise
@@ -134,7 +132,7 @@ async def upload_file_to_workspace(
     try:
         _require_workspace_access(db, work_id, current_user)
         db.close()
-        
+
         return workspace_file_service.upload_file(work_id, file_path, file)
     except HTTPException:
         raise
@@ -154,7 +152,7 @@ async def delete_workspace_file(
     """删除工作空间中的文件或目录"""
     try:
         _require_workspace_access(db, work_id, current_user)
-        
+
         return workspace_file_service.delete_file(work_id, file_path)
     except HTTPException:
         raise
@@ -174,7 +172,7 @@ async def create_workspace_directory(
     """在工作空间中创建目录"""
     try:
         _require_workspace_access(db, work_id, current_user)
-        
+
         return workspace_file_service.create_directory(work_id, dir_path)
     except HTTPException:
         raise
@@ -183,8 +181,6 @@ async def create_workspace_directory(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal server error: {str(e)}"
         )
-
-
 
 
 @router.get("/{work_id}/export")
@@ -261,8 +257,11 @@ def _paper_writing_model(db,user_id):
     from ai_system.config.environment import setup_environment_from_db
     from ai_system.core_handlers.llm_providers import create_llm_from_model_config
     config=setup_environment_from_db(db).config_manager
-    model=config.get_model_config('writing',user_id) or config.get_model_config('brain',user_id)
-    if model is None:raise HTTPException(409,'没有配置写作模型；可直接编辑候选正文')
+    try:
+        model=config.get_model_config('writing',user_id)
+    except ValueError:
+        try:model=config.get_model_config('brain',user_id)
+        except ValueError:raise HTTPException(409,'没有配置可用模型；可直接编辑候选正文') from None
     return create_llm_from_model_config(model)
 
 
@@ -571,10 +570,6 @@ async def literature_check(work_id: str, evidence_id: str, request: LiteratureCl
         raise HTTPException(409,str(exc))
 
 
-class ExperienceSwitch(BaseModel):
-    enabled: bool
-
-
 def _experience_scope(work_id,db,user_id):
     _require_workspace_access(db,work_id,user_id)
     from services.research_experience import ExperienceScope
@@ -680,30 +675,7 @@ async def research_setup(work_id:str,request:ResearchSetupRequest,db:Session=Dep
 
 # Unified contextual comments and file-backed draft editing. The research loop
 # still owns formal experiments and acceptance; drafts remain accessible.
-class PaperSelection(BaseModel):
-    file: str = Field(min_length=1,max_length=500)
-    version: str = Field(pattern=r'^[a-f0-9]{64}$')
-    start: int = Field(ge=0)
-    end: int = Field(ge=0)
-    quote: str = Field(max_length=100000)
-
-
-class PaperReference(BaseModel):
-    quote: str = Field(min_length=1,max_length=100000)
-    selection: PaperSelection | None = None
-    read_version: str | None = None
-    read_quote: str | None = Field(default=None,max_length=100000)
-
-
-class PaperCommentRequest(BaseModel):
-    research_id: str
-    request_id: str = Field(pattern=r'^[A-Za-z0-9_-]{1,64}$')
-    message: str = Field(min_length=1,max_length=20000)
-    selection: PaperSelection | None = None
-    read_version: str | None = None
-    read_quote: str | None = Field(default=None,max_length=100000)
-    thread_id: str | None = Field(default=None,max_length=64)
-    references: list[PaperReference] = Field(default_factory=list,max_length=24)
+from services.chat_services.paper_references import PaperSelection
 
 
 class FilePatch(PaperSelection):
@@ -783,56 +755,3 @@ async def paper_compile(work_id: str, request: dict, db: Session = Depends(get_d
     db.close()
     try:return await paper_project.compile_project(store)
     except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
-
-
-async def _execute_paper_comment(store, execution_id, llm, resume=False):
-    from services.chat_services.paper_comments import execute
-    from ai_system.research.runtime import budget_scope
-    from ai_system.graph.tracing import LLMCallTrace
-    trace=LLMCallTrace()
-    if hasattr(llm,'model_copy'):
-        callbacks=getattr(llm,'callbacks',None)
-        llm=llm.model_copy(update={'callbacks':[*(callbacks if isinstance(callbacks,list) else []),trace]})
-    try:
-        with budget_scope(store.root,store.research_id):
-            await execute(store,execution_id,llm,resume=resume)
-    except Exception:
-        # Failure details live in the execution, not in an unhandled background task.
-        import logging
-        logging.getLogger(__name__).exception('Paper comment did not complete')
-    finally:
-        trace.dump(workspace_path(store.root, '.system/editor_llm_calls.json'))
-
-
-@router.post('/{work_id}/paper/comments',status_code=202)
-async def paper_comment(work_id: str, request: PaperCommentRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
-    store=_paper_store(db,work_id,current_user)
-    _paper_identity(store,request.research_id)
-    from services.chat_services import paper_comments
-    try:
-        # Resolve configuration before recording a runnable request.
-        llm=_paper_writing_model(db,current_user)
-        record,created=paper_comments.create(store,request.request_id,request.message,request.selection.model_dump() if request.selection else None,request.thread_id,request.read_quote,request.read_version,
-                                            references=[r.model_dump() for r in request.references])
-        # FastAPI background tasks can outlive the response handler and its
-        # yield dependency; release the read transaction before scheduling.
-        db.close()
-        if created:background_tasks.add_task(_execute_paper_comment,store,record['id'],llm)
-        return record
-    except (ValueError,ResearchConflict,OSError) as exc:raise HTTPException(409,str(exc))
-
-
-@router.post('/{work_id}/paper/executions/{execution_id}/resume',status_code=202)
-async def paper_comment_resume(work_id: str, execution_id: str, request: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db), current_user: int = Depends(get_current_user)):
-    store=_paper_store(db,work_id,current_user)
-    _paper_identity(store,request.get('research_id'))
-    from services.chat_services import paper_project
-    paper_project.initialize(store)
-    records=paper_project.read_records(store,'paper_executions')
-    record=next((r for r in records if r['id']==execution_id),None)
-    if not record:raise HTTPException(404,'执行记录不存在')
-    if record['state'] not in {'failed','pending','running'}:return record
-    llm=_paper_writing_model(db,current_user)
-    db.close()
-    background_tasks.add_task(_execute_paper_comment,store,execution_id,llm,True)
-    return record

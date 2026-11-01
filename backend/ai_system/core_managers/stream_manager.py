@@ -3,7 +3,7 @@
 """
 
 import logging
-from typing import Optional, Callable, List, Dict, Any
+from typing import Optional, Dict, Any
 from abc import ABC, abstractmethod
 import json
 import asyncio
@@ -19,10 +19,6 @@ class StreamCallback(ABC):
         """处理流式内容"""
         pass
 
-    @abstractmethod
-    async def on_message_complete(self, role: str, content: str):
-        """消息完成时的回调"""
-        pass
 
     @abstractmethod
     async def on_json_block(self, block: Dict[str, Any]):
@@ -36,9 +32,6 @@ class StreamOutputManager:
     def __init__(self, stream_callback: Optional[StreamCallback] = None):
         self.stream_callback = stream_callback
         self.output_count = 0
-        self.current_message_buffer = ""
-        self.current_role = "assistant"
-        self.current_block_type = "main"
         # 添加异步锁，防止并发输出问题
         self._output_lock = asyncio.Lock()
         logger.info("StreamOutputManager初始化完成")
@@ -49,9 +42,6 @@ class StreamOutputManager:
             self.output_count += 1
             logger.debug(
                 f"StreamOutputManager._output() 第 {self.output_count} 次调用: {repr(content[:50])}...")
-
-            # 缓冲内容
-            self.current_message_buffer += content
 
             if self.stream_callback:
                 try:
@@ -89,26 +79,6 @@ class StreamOutputManager:
             # 直接打印JSON格式
             print(json.dumps(block, ensure_ascii=False), flush=True)
 
-    async def finalize_message(self):
-        """完成当前消息，触发完成回调"""
-        if self.stream_callback and self.current_message_buffer.strip():
-            try:
-                await self.stream_callback.on_message_complete(
-                    self.current_role,
-                    self.current_message_buffer.strip()
-                )
-                logger.debug("消息完成回调执行成功")
-            except Exception as e:
-                logger.error(f"消息完成回调执行失败: {e}")
-
-            # 清空缓冲区
-            self.current_message_buffer = ""
-
-    def set_role(self, role: str):
-        """设置当前消息的角色"""
-        self.current_role = role
-        logger.debug(f"设置消息角色: {role}")
-
 
 class SimpleStreamCallback(StreamCallback):
     """简单的流式输出回调实现"""
@@ -124,15 +94,6 @@ class SimpleStreamCallback(StreamCallback):
             except Exception as e:
                 logger.error(f"输出队列写入失败: {e}")
 
-    async def on_message_complete(self, role: str, content: str):
-        """消息完成时的回调"""
-        logger.info(f"消息完成，角色: {role}, 长度: {len(content)}")
-        if self.output_queue:
-            try:
-                # 发送完成标记
-                await self.output_queue.put("[MESSAGE_COMPLETE]")
-            except Exception as e:
-                logger.error(f"发送完成标记失败: {e}")
 
     async def on_json_block(self, block: Dict[str, Any]):
         """处理JSON格式的数据块"""

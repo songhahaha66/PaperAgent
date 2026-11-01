@@ -16,9 +16,6 @@ from ai_system.text_syntax import math_spans as iter_math_spans
 REGISTRY_PATH = ".system/results.json"
 
 
-def math_body(text: str) -> str:
-    return re.sub(r"^\\begin\{[^{}]+\}|\\end\{[^{}]+\}$|^\\[\[(]|\\[\])]$|^\$+|\$+$", "", text).strip()
-
 REF_PATTERN = re.compile(r"\{\{\s*([RF]):\s*([RF]\d+)\s*\}\}")
 FIGURE_LINE = re.compile(r"^[ \t]*\{\{\s*F:\s*(F\d+)\s*\}\}[ \t]*$", re.MULTILINE)
 # 图名里自带的编号（"图3 遗忘因子……"），渲染时统一重新编号，留着会变成"图2 图3 ……"

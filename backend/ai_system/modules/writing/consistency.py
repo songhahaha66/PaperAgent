@@ -9,15 +9,14 @@ from ai_system.research.domain import findings as research_findings
 
 import json
 import re
-from typing import Dict, List
+from typing import List
 
-from langgraph.runtime import Runtime
 
 from ai_system.graph.context import GraphContext
 from ai_system.graph.llm_utils import as_messages, call_structured
 from ai_system.graph.registry import ResultRegistry, find_refs
 from ai_system.research.models import IssueReport
-from ai_system.graph.state import ClaimAudit, ConsistencyReview, PaperState
+from ai_system.graph.state import ClaimAudit, PaperState
 
 RECONCILE_SYSTEM = (
     "你是数学建模竞赛的评审老师。下面是一篇论文各子问题求解后登记的主要结论，"
@@ -85,7 +84,6 @@ def reconcile_prompt(state,ctx):
     contract = ctx.research.snapshot()
     records=execution_review_context(ctx)
     return f"# 实际执行输出、报告与结果文件\n{records}\n\n# 子问题\n{subproblems}\n\n# 结论表\n{ctx.registry.claims_table()}\n\n# 要求与假设\n{json.dumps({'requirements': contract['spec']['requirements'], 'assumptions': contract['assumptions']}, ensure_ascii=False)}"
-
 
 
 def section_doubts(state, ctx):

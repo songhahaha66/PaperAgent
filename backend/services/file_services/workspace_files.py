@@ -195,12 +195,6 @@ class WorkspaceFileService:
             self.resolve(work_id, dir_path, reading=False).mkdir(parents=True, exist_ok=False)
         return {'message':'Directory created successfully'}
 
-    def get_file_info(self, work_id, file_path):
-        path = self.resolve(work_id, file_path)
-        if not path.exists():
-            raise HTTPException(404,'File not found')
-        stat = path.stat()
-        return {'name':path.name,'path':file_path,'type':'file' if path.is_file() else 'directory','size':stat.st_size,'modified':stat.st_mtime}
 
     def export_workspace(self, work_id, *, legacy=False):
         root = get_legacy_workspace_path(work_id) if legacy else self.get_workspace_path(work_id)

@@ -4,11 +4,9 @@ The research/experiment owner decides what a semantic suspicion means. A second
 model never silently edits facts, closes findings, or schedules another run.
 """
 from copy import deepcopy
-import re
 from pydantic import Field
 from .models import Contract, ResearchConflict
-from .domain import experiment_report, report_artifact, save_report_artifact, findings, experiment_scope, current_result_refs
-from .validation import report_fingerprint
+from .domain import experiment_report, save_report_artifact, findings, experiment_scope, current_result_refs
 from .store import digest
 
 CLOSED = {'resolved', 'dismissed', 'superseded'}
@@ -140,9 +138,6 @@ async def check_report(ctx, inputs):
                                   'issues':[i.model_dump() for i in review.issues]})
     return CapabilityProduct('research_state', {'findings':[i.model_dump() for i in review.issues],
                        'log':['语义核查仅提供待核实疑点；未修改解释或计算。']})
-
-
-from .files import read_artifact
 
 
 def register(registry):

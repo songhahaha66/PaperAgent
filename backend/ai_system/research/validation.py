@@ -1,7 +1,6 @@
 """Input-spec integrity and frozen historical context; no metric acceptance gate."""
 import hashlib
 import json
-import re
 
 from .models import Assumption, Requirement
 
@@ -12,27 +11,6 @@ def fingerprint(value):
 
 def report_fingerprint(report):
     return fingerprint({k: v for k, v in report.items() if k not in {"status", "error", "reviews"}})
-
-
-SOURCE_TOKEN = re.compile(r"[A-Za-z]+|\d+(?:\.\d+)?|[^\s]", re.UNICODE)
-
-
-def source_excerpt(source, quote):
-    """Resolve whitespace-only copying differences to an actual original span.
-
-    Numbers and Latin words remain whole tokens: '1 5' cannot become '15', nor
-    'not possible' become 'notpossible'. Stored contracts still use exact text.
-    """
-    if quote and quote in source:
-        return quote
-    spans = list(SOURCE_TOKEN.finditer(source))
-    tokens = [m.group() for m in spans]
-    wanted = SOURCE_TOKEN.findall(quote)
-    if wanted:
-        for index in range(len(tokens) - len(wanted) + 1):
-            if tokens[index:index + len(wanted)] == wanted:
-                return source[spans[index].start():spans[index + len(wanted) - 1].end()]
-    return None
 
 
 def validate_spec(source, analysis):

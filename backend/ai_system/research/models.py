@@ -10,21 +10,6 @@ class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class RowLineage(Contract):
-    path: str = Field(min_length=1, description='保存原始行关系的数据文件，派生表须含稳定原始行键')
-    source_path: str = Field(min_length=1)
-    row_keys: list[str] = Field(min_length=1, description='原始行ID/工作表和行号等实际保留的键列；多值展开保留一对多关系')
-    transformation: str = ''
-
-
-class ResultMeaning(Contract):
-    object: str = Field(min_length=1, description='实际统计或测量对象，不能将展开记录当原始对象')
-    scope: str = Field(min_length=1, description='数据范围、过滤、去重、分母与粒度')
-    statistic: str = Field(min_length=1, description='指标定义、聚合或计算口径')
-    conditions: str = ''
-    lineage: list[RowLineage] = Field(default_factory=list)
-
-
 class ResultSelector(Contract):
     task_id: str
     name: str = Field(min_length=1, description="必须登记的单个结果名称，求解和验证使用相同名称。数值比较只接受标量；序列长度/非负性应分别命名长度/最小值等标量指标，不能引用整组数组")
@@ -163,22 +148,6 @@ class ContentFeedback(Issue):
 class RuntimeFault(Issue):
     """An operational failure; retrying does not invalidate a scientific method."""
     category: Literal['execution', 'service']
-
-
-class CheckResult(Contract):
-    check_id: str
-    outcome: Literal["passed", "failed", "inconclusive"]
-    evidence_refs: list[str]
-    message: str
-    owner_kind: Literal["requirement", "assumption"]
-    owner_id: str
-    owner_revision: int
-
-
-class ValidationRecord(Contract):
-    protocol_hash: str
-    checks: list[CheckResult]
-    outcome: Literal["accepted", "rejected", "inconclusive"]
 
 
 class ReviewRecord(Contract):

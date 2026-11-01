@@ -396,10 +396,9 @@ def scoped_snapshot(snapshot: ResearchSnapshot, subproblem_id: str | None) -> Re
     })
 
 
-
 async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, workspace: str | Path,
                                    question: str, history: list[dict], subproblem_id: str | None = None,
-                                   destination_url: str = ""):
+                                   paper_context: dict | None = None):
     """Use existing evidence only; intentionally has no graph or filesystem write API."""
     # The authenticated workspace chat uses its owner's configured model, just
     # like research execution. Callers cannot supply a destination in a message.
@@ -407,6 +406,9 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
     snapshot = scoped_snapshot(snapshot, subproblem_id)
     # Bounded context, with an explicit record of exactly which evidence was included.
     context = snapshot.model_dump(exclude={"experiments"})
+    if paper_context:
+        from .paper_references import context_text
+        context['paper_references'] = json.loads(context_text(paper_context))
     from ai_system.research.views import question_context
     context['questions'] = question_context(snapshot.questions)
     # A long Q1 must not crowd out every later question in an unscoped answer.
@@ -483,4 +485,3 @@ async def answer_research_question(llm, stream, snapshot: ResearchSnapshot, work
             content = "".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
         if isinstance(content, str) and content:
             await stream._output(content)
-

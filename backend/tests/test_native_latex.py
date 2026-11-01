@@ -13,7 +13,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.export.latex import compile_pdf, native_document
+from ai_system.export.latex import compile_pdf
+from helpers.native_document import native_document
 from ai_system.graph.context import GraphContext
 from ai_system.graph.registry import Result
 from ai_system.modules.writing import sections as writing
@@ -98,15 +99,17 @@ def test_native_table_equations_and_registered_figure_compile(tmp_path):
 
 def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypatch):
     import ai_system.export.latex as latex
-    (tmp_path / 'paper.tex').write_text(r'\undefinedcommand')
+    (tmp_path / 'paper.tex').write_text(r'\documentclass{article}\begin{document}\undefinedcommand\end{document}')
     (tmp_path / 'paper.pdf').write_bytes(b'%PDF-old')
-    monkeypatch.setattr(latex.shutil, 'which', lambda _: '/usr/bin/xelatex')
+    calls=[]
     async def fail(cmd, cwd, **kwargs):
+        calls.append(cmd)
         assert '-no-shell-escape' in cmd and '-halt-on-error' in cmd
         (cwd / '.build/latex/paper.pdf').write_bytes(b'%PDF-partial')
         return 1, '! Undefined control sequence.', ''
     monkeypatch.setattr(latex, 'run_command', fail)
     result = asyncio.run(compile_pdf(tmp_path))
+    assert len(calls)==1 and result.exit_code==1
     assert result.pdf_path is None and result.error
     assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
 

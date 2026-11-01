@@ -142,7 +142,7 @@ def test_transfer_retry_never_reexecutes_or_invalidates_calculation(tmp_path):
 
 
 def test_root_csv_is_collected_and_reads_retained_execution_version(tmp_path):
-    from ai_system.research.feedback import read_artifact
+    from ai_system.research.files import read_artifact
     from ai_system.research.planner import decision_context
     from helpers.research import finish
     from types import SimpleNamespace
@@ -189,10 +189,8 @@ def test_completed_execution_event_already_links_published_logs(tmp_path, monkey
     from ai_system.modules.experiments.execution import build_tools
     from services.chat_services import conversation_timeline as timeline
     root = tmp_path/'public'
-    ctx = GraphContext.create(str(tmp_path/'attempt'), planner_llm=None)
+    ctx = GraphContext.create(str(root), planner_llm=None)
     ctx.research = make_store(root)
-    ctx.delivery_fs = WorkspaceFS(str(root)); ctx.delivery_fs.init_structure()
-    ctx.delivery_events = ctx.events
     events = []
     monkeypatch.setattr(timeline, 'execution_boundary',
         lambda root, rid, kind, item: events.append(timeline.execution_projection(root, rid, item)))
@@ -205,5 +203,5 @@ def test_completed_execution_event_already_links_published_logs(tmp_path, monkey
     asyncio.run(run())
     last = events[-1]
     assert last['status'] == 'completed'
-    assert ctx.delivery_fs.abs(last['script_file']).is_file()
-    assert ctx.delivery_fs.read_text(last['output_file']).strip() == '6'
+    assert ctx.fs.abs(last['script_file']).is_file()
+    assert ctx.fs.read_text(last['output_file']).strip() == '6'

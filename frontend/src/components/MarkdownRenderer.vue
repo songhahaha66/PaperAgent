@@ -114,7 +114,7 @@ async function ensureImageSrc(img: HTMLImageElement) {
   }
 
   try {
-    const url = workspaceFileAPI.getImageUrl(authStore.token!, props.workId, filePath)
+    const url = workspaceFileAPI.getImageUrl(props.workId, filePath)
     const resp = await fetch(url, { headers: { Authorization: `Bearer ${authStore.token}` } })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     const blob = await resp.blob()

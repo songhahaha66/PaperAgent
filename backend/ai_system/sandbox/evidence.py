@@ -3,7 +3,7 @@ import hashlib
 import json
 from services.file_services.workspace_layout import safe_join
 from services.file_services.file_helper import atomic_write, open_read
-from .file_limits import DEFAULT_MAX_FILE_BYTES, bounded_copy, bounded_hash
+from .file_limits import DEFAULT_MAX_FILE_BYTES, bounded_hash
 
 
 def checksum(path):

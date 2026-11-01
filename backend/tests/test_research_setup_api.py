@@ -39,8 +39,7 @@ def test_setup_before_run_cannot_overwrite_checkpoint(env,client):
 
 
 @pytest.mark.parametrize('method,path,body',[('PUT','research-setup',{}),
-    ('GET','paper/project',None),
-    ('POST','paper/executions/unknown/resume',{'research_id':'unknown'})])
+    ('GET','paper/project',None)])
 def test_unified_routes_keep_work_owner_boundary(client,method,path,body):
     assert client.request(method,'/api/workspace/C/'+path,json=body).status_code==403
 
@@ -50,3 +49,7 @@ def test_config_limits_and_inflight_changes_are_rejected(client,monkeypatch):
     assert client.put('/api/workspace/B/research-setup',json={'request_limit':41}).status_code==200
     monkeypatch.setattr(workspace.task_manager,'get_running_task',lambda _:object())
     assert client.put('/api/workspace/B/research-setup',json={}).status_code==409
+
+
+def test_removed_paper_executor_is_unavailable(client):
+    assert client.post('/api/workspace/B/paper/executions/unknown/resume',json={'research_id':'unknown'}).status_code==404

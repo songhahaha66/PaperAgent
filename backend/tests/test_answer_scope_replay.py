@@ -10,7 +10,8 @@ from types import SimpleNamespace
 from langchain_core.messages import ToolMessage
 from ai_system.graph.context import GraphContext
 from ai_system.research import operations
-from ai_system.research.control import delivery_status,graph_view,refresh_registry
+from ai_system.research.questions import delivery_status
+from ai_system.research.control import graph_view,refresh_registry
 from ai_system.research.domain import current_results
 from ai_system.research.feedback import ReportEdit,interpretation_version,revise_interpretation
 from ai_system.research.loop import prepare_action,resume

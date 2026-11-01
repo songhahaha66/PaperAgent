@@ -5,11 +5,10 @@
 """
 
 import logging
-import time
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
 
-from models.models import ChatSession, User
+from models.models import ChatSession
 from services.chat_services.chat_history_manager import ChatHistoryManager
 
 logger = logging.getLogger(__name__)
@@ -57,14 +56,6 @@ class ChatService:
             self.db_session.rollback()
             raise
 
-    def add_message(self, work_id: str, role: str, content: str, metadata: Optional[Dict] = None):
-        """添加消息到工作区会话库"""
-        try:
-            self.history_manager.save_message(work_id, role, content, metadata)
-            logger.info(f"消息已保存: {work_id}, 角色: {role}")
-        except Exception as e:
-            logger.error(f"保存消息失败: {e}")
-            raise
 
     def get_work_chat_history(self, work_id: str, limit: Optional[int] = None) -> List[Dict]:
         """获取work的聊天记录（原始格式）"""
@@ -82,7 +73,7 @@ class ChatService:
         """Merge persisted comment views for display only, never research context."""
         from datetime import datetime
         from pathlib import Path
-        from .paper_comments import chat_history
+        from .paper_history import chat_history
         messages=self.get_work_chat_history(work_id)
         from .task_manager import task_manager
         task = task_manager.get_task(work_id)
@@ -111,14 +102,6 @@ class ChatService:
             logger.error(f"获取上下文失败: {e}")
             return {}
 
-    def update_work_context(self, work_id: str, context_updates: Dict):
-        """更新work的上下文"""
-        try:
-            self.history_manager.update_context(work_id, context_updates)
-            logger.info(f"上下文已更新: {work_id}")
-        except Exception as e:
-            logger.error(f"更新上下文失败: {e}")
-            raise
 
     def get_session_by_work_id(self, work_id: str, user_id: int) -> Optional[ChatSession]:
         """通过work_id获取session"""
@@ -132,25 +115,6 @@ class ChatService:
             logger.error(f"获取session失败: {e}")
             return None
 
-    def delete_work_session(self, work_id: str, user_id: int) -> bool:
-        """删除work对应的session和聊天记录"""
-        try:
-            # 删除数据库中的session记录
-            session = self.get_session_by_work_id(work_id, user_id)
-            if session:
-                self.db_session.delete(session)
-                self.db_session.commit()
-
-            # 清空JSON聊天记录
-            self.history_manager.clear_history(work_id)
-
-            logger.info(f"删除work会话: {work_id}")
-            return True
-
-        except Exception as e:
-            logger.error(f"删除work会话失败: {e}")
-            self.db_session.rollback()
-            return False
 
     def get_chat_statistics(self, work_id: str) -> Dict:
         """获取聊天统计信息"""

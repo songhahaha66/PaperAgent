@@ -51,7 +51,7 @@ function deferred() {
           fileReads++
           return [...files]
         },
-        getImageUrl: (_token, _work, path) => path,
+        getImageUrl: (_work, path) => path,
       },
     },
   }

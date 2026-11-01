@@ -1,6 +1,5 @@
 """Source-bound citations and fail-closed claim support checks, separate from R/F."""
 from services.file_services.workspace_layout import workspace_path
-import hashlib
 import asyncio
 import json
 import re

@@ -9,7 +9,8 @@ from ai_system.research.store import ResearchStore
 from ai_system.research.views import activity, activity_progress
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.graph.context import GraphContext
-from ai_system.research.control import worker_context, refresh_registry
+from helpers.legacy_research import worker_context
+from ai_system.research.control import refresh_registry
 from ai_system.sandbox.artifacts import capture_local_outputs, inherit_execution_files
 from services.file_services.workspace_fs import WorkspaceFS
 from services.chat_services.chat_history_manager import ChatHistoryManager

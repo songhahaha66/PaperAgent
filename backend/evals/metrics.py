@@ -11,7 +11,7 @@ import json
 import re
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, Tuple
 
 
 # 数模论文的标准章节：(名称, 标题关键词)

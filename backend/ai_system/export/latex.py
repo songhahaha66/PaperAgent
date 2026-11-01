@@ -1,7 +1,6 @@
 """Native LaTeX document assembly and PDF compilation. No Markdown conversion."""
 
 import re
-import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
@@ -10,7 +9,6 @@ from .markdown_prep import run_command
 from ai_system.sandbox.commands import sandbox_operation
 from ai_system.text_syntax import has_markdown
 
-TEMPLATE_PATH = Path(__file__).with_name("template.tex")
 BUILD_DIR = ".build/latex"
 COMPILE_TIMEOUT = 180
 
@@ -38,12 +36,6 @@ def escape_plain(text: str) -> str:
         "_": r"\_", "{": r"\{", "}": r"\}", "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
     }
     return "".join(table.get(ch, ch) for ch in text)
-
-
-def native_document(title: str, abstract: str, body: str) -> str:
-    """Join native section fragments into the built-in ctex document."""
-    values = {"TITLE": escape_plain(title), "ABSTRACT": abstract.strip(), "BODY": body.strip()}
-    return re.sub(r"<<(TITLE|ABSTRACT|BODY)>>", lambda m: values[m.group(1)], TEMPLATE_PATH.read_text(encoding="utf-8"))
 
 
 def fragment_issues(text: str) -> List[str]:

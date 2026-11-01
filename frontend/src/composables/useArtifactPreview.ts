@@ -159,7 +159,7 @@ export function useArtifactPreview(options: {
         throw new Error('未登录')
       }
 
-      const url = workspaceFileAPI.getImageUrl(token, workId.value, filePath)
+      const url = workspaceFileAPI.getImageUrl(workId.value, filePath)
 
       const response = await fetch(url, {
         cache: 'no-store',

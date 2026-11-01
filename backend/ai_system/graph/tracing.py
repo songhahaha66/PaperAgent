@@ -25,11 +25,6 @@ CURRENT_CAPABILITY: ContextVar[str] = ContextVar('research_capability', default=
 SLOW_CALL_SECONDS = 90.0
 
 
-def set_label(label: str) -> None:
-    """标记当前任务（每个 Send 分支是独立任务），之后在这个任务里发起的模型调用都带上它"""
-    CURRENT_LABEL.set(label)
-
-
 @contextmanager
 def labelled(label: str):
     """在这段代码里发起的模型调用都带上标签（子问题编号、阶段或章节 key）"""

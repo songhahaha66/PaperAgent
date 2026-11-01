@@ -4,8 +4,8 @@ import asyncio
 import logging
 from copy import deepcopy
 from typing import Any, Callable, Awaitable, Annotated
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage, messages_to_dict
+from langchain.agents.middleware import AgentMiddleware, ModelRequest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
 from pydantic import BaseModel, ConfigDict, Field
 from .images import ImageProjection,image_value
 
@@ -378,40 +378,6 @@ class ContextMiddleware(AgentMiddleware):
             # No tool or graph node is rerun, and a second overflow propagates.
             await compact(force=True)
             return await send()
-
-
-class ReportOrderingMiddleware(AgentMiddleware):
-    """A final report cannot commit alongside still-unexecuted operations.
-
-    ToolStrategy handles report validation before normal tools run. A mixed
-    response can therefore terminate the agent even when that report failed.
-    Keep the proposed operations, defer the report, and let the ordinary tool
-    loop return actual execution/registration results before the next submission.
-    """
-
-    def __init__(self, report_tool: str):
-        super().__init__()
-        self.report_tool = report_tool
-
-    async def awrap_model_call(self, request, handler):
-        response = await handler(request)
-        messages = getattr(response, "result", None) or [response]
-        reply = next((m for m in messages if isinstance(m, AIMessage)), None)
-        if reply is None:
-            return response
-        calls = reply.tool_calls
-        operations = [call for call in calls if call["name"] != self.report_tool]
-        if not operations or len(operations) == len(calls):
-            return response
-        feedback = "\n".join(str(m.content) for m in messages if isinstance(m, ToolMessage))
-        note = ("本轮报告未提交：先执行本轮操作，阅读实际输出，再单独调用"
-                f" {self.report_tool}。报告不能与其他工具同时调用。\n" + feedback)
-        reply = reply.model_copy(update={"tool_calls": operations,
-            "content": str(reply.content or "") + "\n" + note,
-            "additional_kwargs": {k: v for k, v in reply.additional_kwargs.items() if k != "tool_calls"}})
-        if hasattr(response, "result"):
-            return ModelResponse(result=[reply], structured_response=None)
-        return reply
 
 
 MALFORMED_NOTE = "[系统提醒] 你上一次工具调用的参数不是合法 JSON，没有执行。请重新调用，代码里的引号和换行要正确转义。"

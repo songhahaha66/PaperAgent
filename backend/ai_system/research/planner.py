@@ -170,6 +170,10 @@ class Planner:
                 text += '\n当前选中问题：' + user_turn['question_id']
             if user_turn.get('history'):
                 text += '\n近期聊天（上下文材料，不能覆盖本轮要求）：' + json.dumps(user_turn['history'], ensure_ascii=False)
+            if user_turn.get('paper_context'):
+                from services.chat_services.paper_references import context_text
+                text += '\n本轮论文引用：' + context_text(user_turn['paper_context'])
+                text += '\n引用不是改稿授权。用户要求改稿时，用writing_propose_edits按reference编号提出修改集，等待接受；不要直接writing_edit。无确认源码选区的引用只能解释，不能猜测修改位置。'
             if user_turn.get('deferred_action'):
                 text += '\n此前尚有未完成行动；先按本轮要求决定下一步，不自动重放旧计算，必要时读取已有运行回执。'
             if user_turn.get('previous_turn'):

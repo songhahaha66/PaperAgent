@@ -2,7 +2,7 @@
 from helpers.contracts import store_for, submit
 from ai_system.research.views import questions
 from ai_system.graph.context import GraphContext
-from ai_system.export.latex import native_document
+from helpers.native_document import native_document
 
 
 def accepted_store(root):

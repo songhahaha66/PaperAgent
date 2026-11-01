@@ -130,7 +130,6 @@ def test_read_only_followup_receives_direct_output_without_registered_results(tm
             if False:yield None
     class Stream:
         async def send_json_block(self,*args):pass
-    monkeypatch.setenv('AI_RESEARCH_CONTEXT_ENABLED','1')
     async def scenario():
         try:
             q=await invoke(ctx,'research.create_question',question='实际总和')
@@ -139,8 +138,7 @@ def test_read_only_followup_receives_direct_output_without_registered_results(tm
                 'thread_id':ctx.research.research_id,'engine_version':'research-v3'}))
             snapshot=research_snapshot(tmp_path,'work','paused')
             assert not snapshot.results and len(snapshot.runs)==1
-            await answer_research_question(Model(),Stream(),snapshot,tmp_path,'刚才算出什么？',[],q['question_id'],
-                                          destination_url='https://api.deepseek.com')
+            await answer_research_question(Model(),Stream(),snapshot,tmp_path,'刚才算出什么？',[],q['question_id'])
             assert run['run_id'] in captured[0] and 'actual_total 6' in captured[0]
         finally:await ctx.kernels.close()
     asyncio.run(scenario())

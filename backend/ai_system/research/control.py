@@ -4,16 +4,14 @@ from services.file_services.workspace_layout import workspace_path
 from .domain import experiment_report, experiment_design
 
 import json
-import shutil
 import hashlib
 
 
 from ..graph.registry import Claim, Result
-from ..graph.context import GraphContext
-from .models import ResearchConflict
 from .planner import ready_tasks
 from .assumptions import assumption_scope
 from .progress import task_progress
+from .questions import delivery_status
 
 
 def refresh_registry(ctx):
@@ -177,90 +175,3 @@ def current_validation(snapshot, task):
     attempt = next((a for a in reversed(snapshot["executions"].values())
                     if a["task_id"] == task["task_id"] and a["revision"] == task["revision"]), {})
     return attempt.get("validation")
-
-
-from .questions import delivery_status
-
-
-def _copy_tree(source, target):
-    if source.exists():
-        if any(p.is_symlink() for p in source.rglob("*")):
-            raise ValueError("执行输入包含工作区外的文件链接")
-        shutil.copytree(source, target, dirs_exist_ok=True)
-
-
-def worker_context(ctx, order):
-    """Root execution in an attempt workspace instead of active outputs.
-
-    Inputs and predecessor handoffs are copied before execution. The submission
-    checks source data hashes again, catching a correction during the copy/run.
-    """
-    work = ctx.workspace / "experiments" / order.attempt_id / "workspace"
-    work.mkdir(parents=True, exist_ok=True)
-    snapshot = ctx.research.snapshot()
-    task = snapshot['experiments'][order.task_id]
-    if task.get('input_files') is None:
-        for folder in ('data', 'attachment'):
-            _copy_tree(ctx.workspace / folder, work / folder)
-    else:
-        for path in task['input_files']:
-            source = ctx.fs.abs(path)
-            target = work / path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source, target)
-    from .domain import experiment_scope, execution_lineage
-    from ai_system.sandbox.artifacts import inherit_execution_files
-    from services.file_services.workspace_fs import WorkspaceFS
-    scope = experiment_scope(snapshot['experiments'], task['dependencies'])
-    target_fs = WorkspaceFS(str(work))
-    target_fs.init_structure()
-    inherited = set()
-    # Dependency order first; continuation products override their older inputs.
-    copied = set()
-    def copy_execution(key, execution_id):
-        for aid in reversed(execution_lineage(snapshot, execution_id)):
-            if aid in copied: continue
-            copied.add(aid)
-            attempt=snapshot['executions'][aid]
-            source = ctx.workspace if attempt.get('workspace')=='.' else ctx.workspace / 'experiments' / aid / 'workspace'
-            inherited.update(inherit_execution_files(source, target_fs, key,run_ids=attempt.get('run_ids')))
-    def copy_dependency(key):
-        for dependency in snapshot['experiments'][key]['dependencies']:
-            copy_dependency(dependency)
-        copy_execution(key, snapshot['experiments'][key]['execution_id'])
-    for dep in task['dependencies']:
-        copy_dependency(dep)
-    parent = snapshot['executions'][order.attempt_id].get('parent_attempt')
-    if parent:
-        copy_execution(order.task_id, parent)
-    target_fs._manifest['inherited_runs'] = sorted(inherited)
-    target_fs._save_manifest()
-    local = GraphContext.create(str(work), planner_llm=ctx.planner_llm, coder_llm=ctx.coder_llm,
-        writer_llm=ctx.writer_llm, stream_manager=ctx.events.stream_manager,
-        template_requirements=ctx.template_requirements, skill_policy=ctx.skill_policy,
-        experience_scope=ctx.experience_scope,experience_store=ctx.research,experience_order=order,
-        source_workspace=ctx.workspace, sandbox_work_id=str(ctx.workspace),
-        sandbox_experiment_id=order.task_id + ':' + str(order.revision) + ':' +
-            hashlib.sha256(json.dumps({p: h for p,h in order.input_refs.items() if p != 'continuation'}, sort_keys=True).encode()).hexdigest())
-    local.compact_paper=ctx.compact_paper
-    local.delivery_fs = ctx.fs
-    local.delivery_events = ctx.events
-    allowed = scope | ({order.task_id} if parent else set())
-    local.registry.results = {ref: result for ref, result in ctx.registry.results.items() if result.subproblem in allowed}
-    local.registry.claims = {ref: claim for ref, claim in ctx.registry.claims.items() if claim.subproblem in allowed}
-    # Published figures use root-workspace paths, while a continued attempt's
-    # copied files still use their original attempt paths. Materialize the
-    # registered paths too, preserving references and execution provenance.
-    for result in local.registry.results.values():
-        if result.path:
-            source = ctx.fs.abs(result.path)
-            if source.is_file():
-                target = local.fs.abs(result.path)
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source, target)
-    # Attempt-relative paths do not exist in the user's root workspace. Publish
-    # their final paths only after the coordinator accepts the commit below.
-    local.events.publish_files = False
-    # Progress belongs to the coordinator. Attempts only emit local messages.
-    local.set_stage = ctx.set_stage
-    return local

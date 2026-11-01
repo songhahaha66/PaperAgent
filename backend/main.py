@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from models import models
 from database.database import engine
 from sqlalchemy.orm import Session
@@ -41,7 +40,7 @@ async def lifespan(app: FastAPI):
         logger.warning('LangSmith 追踪未启用：缺少 LANGSMITH_API_KEY')
     else:
         logger.info('LangSmith 追踪：%s', status)
-    
+
     # 显示路径配置
     logger.info(f"项目根目录: {get_project_root()}")
     logger.info(f"PA_DATA 目录: {get_pa_data_base()}")
@@ -58,7 +57,7 @@ async def lifespan(app: FastAPI):
     yield
     # 关闭时执行
     logger.info("正在关闭应用...")
-    
+
 
 app = FastAPI(
     title="PaperAgent API",
@@ -102,14 +101,12 @@ for router in all_routers:
     app.include_router(router, dependencies=[Depends(project_route_access)])
 
 # 设置app实例引用，供WebSocket路由使用
-from routers.chat_routes.chat import set_app_instance
-set_app_instance(app)
 
 if __name__ == "__main__":
     # 优化uvicorn配置，提高并发性能
     uvicorn.run(
-        app, 
-        host="0.0.0.0", 
+        app,
+        host="0.0.0.0",
         port=8000,
         # 异步优化配置
         loop="asyncio",

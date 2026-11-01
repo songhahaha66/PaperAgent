@@ -1,9 +1,4 @@
-"""
-判断层：闭集问题 + 概率 + 置信度
-
-优先用 Jev（TypeSafe System One），无 key 时回退到 LLM 结构化输出。
-"""
-
+"""Structured LLM scoring for the optional evaluation CLI."""
 from .base import (
     Answers,
     Choice,
@@ -15,7 +10,6 @@ from .base import (
     Score,
     ScoreAnswer,
 )
-from .jev import JevJudge, jev_available
 from .llm import LLMJudge
 
 __all__ = [
@@ -23,12 +17,10 @@ __all__ = [
     "Choice",
     "ChoiceAnswer",
     "Judge",
-    "JevJudge",
     "LLMJudge",
     "Noul",
     "NoulAnswer",
     "Question",
     "Score",
     "ScoreAnswer",
-    "jev_available",
 ]

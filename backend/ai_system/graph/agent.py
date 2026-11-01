@@ -46,7 +46,6 @@ class PaperGraphAgent:
         template_id: Optional[int] = None,
         codeagent_llm=None,
         output_mode: str = "markdown",
-        writer_llm=None,
         **options,
     ):
         if not workspace_dir:
@@ -67,7 +66,6 @@ class PaperGraphAgent:
         self.work_id = work_id
         self.template_id = template_id
         self.codeagent_llm = codeagent_llm
-        self.writer_llm = writer_llm
         self.options: Dict[str, Any] = {"output_mode": output_mode, **options}
         self.last_result: Dict[str, Any] = {}
         self.waiting_confirm = False
@@ -103,7 +101,6 @@ class PaperGraphAgent:
             self.workspace_dir,
             planner_llm=self.llm,
             coder_llm=self.codeagent_llm,
-            writer_llm=self.writer_llm,
             stream_manager=self.stream_manager,
             **self.options,
         )
@@ -149,7 +146,7 @@ class PaperGraphAgent:
 
     async def revise_research(self, *, command_id: str, research_id: str, base_revision: int,
                               change: str, scope: list[str] | None = None, source_issue:dict|None=None,
-                              replace_pending: bool = False) -> str:
+                              replace_pending: bool = False, paper_context: dict | None = None) -> str:
         """Apply an idempotent revision, then selectively resume this research."""
         if not change.strip():
             raise ValueError('修改内容不能为空')
@@ -212,7 +209,8 @@ class PaperGraphAgent:
             output = self._final_message(self.last_result, ctx)
             await self._emit("main_agent_complete", output)
             return output
-        return await self.send_message(change, message_id='revision:' + command_id, replace_pending=True)
+        return await self.send_message(change, message_id='revision:' + command_id, replace_pending=True,
+                                       paper_context=paper_context)
 
     async def resume_failed(self) -> str:
         """从当前运行记录恢复，不回放历史计算。"""
@@ -233,7 +231,7 @@ class PaperGraphAgent:
 
     async def send_message(self, message: str, *, question_id: str | None = None,
                            message_id: str | None = None, history: list | None = None,
-                           replace_pending: bool = False) -> str:
+                           replace_pending: bool = False, paper_context: dict | None = None) -> str:
         """Append a durable user turn to the existing research Agent session."""
         self._require_current_thread()
         store = ResearchStore(self.workspace_dir, self._load_thread())
@@ -270,6 +268,7 @@ class PaperGraphAgent:
                 # action in the turn but do not replay it ahead of that request.
                 state['conversation_input'] = {'id': message_id or 'user:' + uuid.uuid4().hex,
                     'message': message, 'question_id': question_id, 'outcome': state['outcome'],
+                    'paper_context': paper_context,
                     'history': [{'role': m['role'], 'content': str(m.get('content', ''))[-2000:]}
                                 for m in (history or [])[-8:] if m.get('role') in {'user', 'assistant'}],
                     'previous_turn': previous_turn,

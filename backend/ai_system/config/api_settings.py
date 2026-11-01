@@ -28,10 +28,6 @@ class EnvApiSettings:
     # 供应商私有参数（PAPERAGENT_API_EXTRA_BODY，JSON），如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
     extra_body: Optional[Dict[str, Any]] = None
 
-    @property
-    def is_configured(self) -> bool:
-        return bool(self.api_key and self.base_url and self.model_id)
-
 
 def normalize_openai_base_url(url: str) -> str:
     """

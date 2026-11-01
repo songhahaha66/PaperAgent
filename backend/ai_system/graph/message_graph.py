@@ -46,7 +46,8 @@ question_id只能从提供的问题或实验ID中选择，指代不明确时不�
 """
 
 
-async def classify_message(llm, message, snapshot, history, scope=None):
+async def classify_message(llm, message, snapshot, history, scope=None, paper_context=None):
+    from services.chat_services.paper_references import context_text
     payload = {
         'message': message,
         'history': [{'role': m['role'], 'content': str(m.get('content', ''))[-2000:]}
@@ -54,6 +55,7 @@ async def classify_message(llm, message, snapshot, history, scope=None):
         'state': {'research_id': snapshot.research_id, 'status': snapshot.work_status,
                   'pending_question': snapshot.pending_question},
         'selected_question_id': scope,
+        'paper_references': context_text(paper_context),
         'questions': [{'id': q['id'], 'title': str(q.get('title', ''))[:300]}
                       for q in snapshot.questions if not q.get('retired')][:100],
         'experiments': [{'id': e['task_id'], 'question_id': e.get('question_id'),
@@ -113,6 +115,7 @@ class MessageContext:
     work_id: str
     turn: dict
     execute: Callable[[dict], Awaitable[None]]
+    paper_context: dict | None = None
 
 
 async def classify_intent(state, runtime):
@@ -126,7 +129,8 @@ async def classify_intent(state, runtime):
     if ctx.requested_action == 'auto':
         from .tracing import labelled
         with budget_scope(Path(ctx.workspace)), labelled('intent'):
-            intent = await classify_message(ctx.llm, ctx.message, ctx.snapshot, ctx.history, ctx.scope)
+            intent = await classify_message(ctx.llm, ctx.message, ctx.snapshot, ctx.history, ctx.scope,
+                                            paper_context=ctx.paper_context)
         action, scope = resolve_intent(intent, ctx.snapshot, ctx.scope)
         question = intent.clarification
     else:
@@ -152,10 +156,8 @@ async def dispatch_message(state, runtime):
 def build_message_graph():
     graph = StateGraph(MessageState, context_schema=MessageContext)
     graph.add_node('classify_intent', classify_intent)
-    # Separate nodes make the selected operation visible in graph traces.
-    for name in ('ask', 'clarify', 'run', 'message', 'revise_research', 'resume', 'confirm', 'revise'):
-        graph.add_node(name, dispatch_message)
-        graph.add_edge(name, END)
+    graph.add_node('dispatch', dispatch_message)
     graph.add_edge(START, 'classify_intent')
-    graph.add_conditional_edges('classify_intent', lambda state: state['route']['action'])
+    graph.add_edge('classify_intent', 'dispatch')
+    graph.add_edge('dispatch', END)
     return graph.compile()

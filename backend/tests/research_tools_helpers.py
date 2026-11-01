@@ -145,10 +145,10 @@ def research_step(messages,plan,transform=lambda text:text):
     body='# '+plan.title+'\n\n'+'\n\n'.join('## '+q['title']+'\n'+question_text(q) for q in questions.values())
     common=next((json.loads(m.content) for m in messages if isinstance(m,HumanMessage) and str(m.content).startswith('{') and 'template_requirements' in json.loads(m.content)),{})
     if common.get('template_requirements'):
-        from ai_system.graph.outline import template_outline
+        from helpers.outline import template_outline
         body='# '+plan.title+'\n\n'+'\n\n'.join('## '+item['title']+'\n'+('\n'.join(q['title']+'：'+question_text(q) for q in questions.values())) for item in template_outline(common['template_requirements']))
     if context['source'].get('output_mode')=='latex':
-        from ai_system.export.latex import native_document,escape_plain
+        from helpers.native_document import native_document,escape_plain
         body=native_document(plan.title,escape_plain(body),'')
     body=transform(body)
     import hashlib

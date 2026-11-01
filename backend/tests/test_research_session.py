@@ -19,7 +19,6 @@ from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.chat_service import ChatService as DurableChatService
 
 
-
 def workspace_bytes(root):
     """Compare public files plus the state/evidence moved outside that tree."""
     from services.file_services.workspace_layout import private_root, evidence_root
@@ -89,7 +88,6 @@ def test_snapshot_scopes_real_results_and_allowlists_manifest_paths(tmp_path):
 
 @pytest.mark.parametrize('destination', ['https://api.deepseek.com/v1', 'https://aigw.saurlax.com/v1'])
 def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp_path, monkeypatch, destination):
-    monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
     original = seed(tmp_path)
     requests, blocks, output = [], [], []
     class Model:
@@ -101,7 +99,7 @@ def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp
         async def _output(self, content): output.append(content)
     asyncio.run(answer_research_question(
         Model(), Stream(), research_snapshot(tmp_path, "work", "completed"), tmp_path,
-        "解释 Q1", [{"role": "user", "content": "这个模型怎么样"}], "Q1", destination_url=destination,
+        "解释 Q1", [{"role": "user", "content": "这个模型怎么样"}], "Q1",
     ))
     assert output == ["AUC 为 0.82 [R1]"]
     assert blocks[0][0] == "research_context"
@@ -113,7 +111,6 @@ def test_read_only_question_streams_scoped_evidence_and_preserves_every_file(tmp
 
 @pytest.fixture
 def web(monkeypatch, tmp_path):
-    monkeypatch.setenv("AI_RESEARCH_CONTEXT_ENABLED", "1")
     root = tmp_path / 'work'
     root.mkdir()
     seed(root)
@@ -248,9 +245,7 @@ def test_websocket_followup_never_constructs_graph_or_changes_research_status(we
     assert original == research_files(root), 'conversation checkpoints must not mutate research evidence'
 
 
-def test_websocket_auto_classifies_before_readonly_answer_without_loading_jev(web,monkeypatch):
-    def forbidden(*args,**kwargs):raise AssertionError('automatic chat must not load Jev')
-    monkeypatch.setattr('ai_system.judge.JevJudge',forbidden)
+def test_websocket_auto_classifies_before_readonly_answer(web,monkeypatch):
     client,work,calls,statuses,saved,root=web
     qid=research_snapshot(root,'work','completed').questions[0]['id']
     events=exchange(client,{'problem':'解释这个结果，并指出局限','subproblem_id':qid})
@@ -274,6 +269,35 @@ def test_question_while_waiting_preserves_pending_clarification(web):
     assert events[-1]['type']=='complete' and events[-1]['work_status']=='waiting'
     assert [name for name,_ in calls]==['classify','ask'] and statuses==[]
     assert store.snapshot()==original
+
+
+def test_paper_reference_uses_same_socket_and_readonly_route(web):
+    from services.chat_services import paper_project as project
+    client,work,calls,statuses,saved,root=web
+    doc=project.snapshot(root)
+    text=next(f['text'] for f in doc['files'] if f['path']=='paper.md')
+    context={'research_id':'research-1','references':[{'quote':text,'selection':{
+        'file':'paper.md','version':doc['version'],'start':0,'end':len(text),'quote':text}}]}
+    events=exchange(client,{'problem':'解释所引用的原文','request_id':'quoted-question','paper_context':context})
+    assert events[-1]['type']=='complete' and statuses==[]
+    assert [name for name,_ in calls]==['classify','ask']
+    payload=json.loads(calls[-1][1][-1].content.split('当前工作材料：\n',1)[1].split('\n\n用户问题：',1)[0])
+    assert payload['research']['paper_references'][0]['quote']==text
+    from services.chat_services.chat_history_manager import ChatHistoryManager
+    turn=next(m for m in ChatHistoryManager(root.parent).get_messages('work') if m['id']=='user:quoted-question')
+    assert turn['metadata']['paper_context']['references'][0]['selection']['version']==doc['version']
+
+
+def test_stale_reference_rejects_before_classifying_or_changing_status(web):
+    from services.chat_services import paper_project as project
+    client,work,calls,statuses,saved,root=web
+    doc=project.snapshot(root);text=(root/'paper.md').read_text()
+    context={'research_id':'research-1','references':[{'quote':text,'selection':{
+        'file':'paper.md','version':doc['version'],'start':0,'end':len(text),'quote':text}}]}
+    (root/'paper.md').write_text('人工修改的新正文')
+    events=exchange(client,{'problem':'修改这里','paper_context':context})
+    assert events[-1]['type']=='error' and events[-1]['scope']=='command'
+    assert calls==[] and statuses==[]
 
 
 @pytest.mark.parametrize('intent,expected', [('work','message'),('amend','revise_research'),('resume','resume'),('respond','run')])
@@ -369,7 +393,7 @@ def test_readonly_answer_uses_configured_model_without_legacy_opt_in(tmp_path, m
         async def send_json_block(self, *args): pass
         async def _output(self, *args): pass
     asyncio.run(answer_research_question(Model(), Stream(), research_snapshot(tmp_path, 'work', 'completed'),
-                                         tmp_path, '解释结果', [], destination_url='https://configured.example/v1'))
+                                         tmp_path, '解释结果', []))
     assert seen
 
 

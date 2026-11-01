@@ -6,7 +6,7 @@ import json,time,uuid,hashlib,re,asyncio
 from dataclasses import asdict,is_dataclass
 from contextlib import closing
 from pathlib import Path
-from .store import ResearchStore,digest
+from .store import digest
 from .models import IssueReport
 
 POLICY='review-context-cache-v1'

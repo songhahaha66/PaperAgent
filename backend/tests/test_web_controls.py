@@ -105,6 +105,9 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
             assert start['type'] == 'start'
             for _ in range(10):
                 event = ws.receive_json()
+                if event['type'] == 'message_routed':
+                    assert event['action']=='run'
+                    continue
                 assert event['type'] == 'reply_update'
                 if any(s.get('block', {}).get('type') == 'paper_stage' for s in event['update']['segments']): break
             else: pytest.fail('paper_stage checkpoint missing')

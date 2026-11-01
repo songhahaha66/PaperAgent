@@ -1,13 +1,4 @@
-"""
-判断层的统一接口
-
-问题类型与 TypeSafe System One 的三种原语一一对应：
-- Noul：是/否，返回"是"的概率
-- Choice：从闭集中选一个，返回各选项概率与置信度
-- Score：按有序等级打分，返回期望等级（0 起）、各等级概率与置信度
-
-所有实现（Jev、LLM 回退）都返回同一种 Answers，调用方不关心底层是谁。
-"""
+"""Typed questions and scoring results for structured LLM evaluation."""
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Protocol, Union
@@ -54,7 +45,6 @@ class ScoreAnswer:
     score: float
     probabilities: Dict[int, float]
     confidence: Optional[float]
-    # LLM 回退会给出理由；Jev 不生成文本
     reason: str = ""
 
 

@@ -119,15 +119,15 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
 async def publish_outputs(ctx, run_ids):
     """Publish and index the same saved run for initial delivery and recovery."""
     from ai_system.sandbox.artifacts import capture_run_files
-    paths=capture_run_files(ctx.fs,ctx.delivery_fs or ctx.fs,run_ids=run_ids)
-    store=ctx.experience_store or ctx.research
+    paths=capture_run_files(ctx.fs,ctx.fs,run_ids=run_ids)
+    store=ctx.research
     if store and any(set(run_ids).intersection(a.get('run_ids', [])) for a in store.snapshot()['executions'].values()):
         store.sync_execution_files(run_ids)
     for rid in run_ids:
         info=ctx.fs.get_run_info(rid) or {}
         if info.pop('publication_error', None):ctx.fs._save_manifest()
     for path in paths:
-        await (ctx.delivery_events or ctx.events).file_changed(path)
+        await ctx.events.file_changed(path)
     return paths
 
 

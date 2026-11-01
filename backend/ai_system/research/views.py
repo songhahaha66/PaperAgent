@@ -1,7 +1,6 @@
 """Shared read-only question, provenance and execution projections."""
 from services.file_services.workspace_layout import workspace_path
 import re
-from .store import digest
 from .domain import findings
 from .progress import issue_next_step
 from ai_system.graph.registry import find_refs
@@ -236,7 +235,6 @@ def model_usage(store):
                                             for (scope,phase),items in sorted(groups.items())]}
 
 
-
 def model_activity(store, work_status):
     # Explicit ownership is frozen at request start; never parse historical labels.
     import json
@@ -278,7 +276,7 @@ def _activity_error(item, exc):
 def activity_progress(ctx, item):
     """Persist a bounded execution preview; full logs stay in run files."""
     from .runtime import notify_runtime
-    store = getattr(ctx, 'experience_store', None) or getattr(ctx, 'research', None)
+    store = getattr(ctx, 'research', None)
     if store is None:
         return
     store.record_activity(item)
@@ -309,7 +307,7 @@ def activity(ctx, capability, task_id=None, *, reuse_parent=None, **links):
             _activity_error(item,exc)
             raise
         return
-    store=getattr(ctx,'experience_store',None) or getattr(ctx,'research',None)
+    store=getattr(ctx,'research',None)
     snapshot=store.snapshot() if store is not None else None
     if snapshot is None:store=None
     if task_id is not None:

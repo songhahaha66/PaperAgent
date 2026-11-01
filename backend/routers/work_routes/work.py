@@ -1,6 +1,5 @@
 from services.file_services.workspace_layout import workspace_path
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
-from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from database.database import get_db
 from auth.auth import get_current_user
@@ -9,8 +8,6 @@ from services import crud
 from typing import Optional
 from ..utils import route_guard
 from config.paths import get_workspace_path
-import os
-import uuid
 from pathlib import Path
 import json
 from datetime import datetime

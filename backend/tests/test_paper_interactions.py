@@ -8,7 +8,7 @@ import json
 from types import SimpleNamespace
 import pytest
 from ai_system.research.models import ResearchConflict
-from services.chat_services import paper_project as project, paper_comments as comments
+from services.chat_services import paper_project as project
 from services.chat_services import paper_sources
 from helpers.paper import selection
 
@@ -64,50 +64,6 @@ def test_group_conflict_writes_no_files(paper):
     (store.root/'part.tex').write_text('附录人工修改。')
     with pytest.raises(ResearchConflict):run(project.decide(store,p['id'],'apply'))
     assert '主文改' not in path.read_text()
-
-
-def test_comment_reads_excel_corrects_errors_and_resumes_without_replaying_tools(paper,monkeypatch):
-    from research_tools_helpers import ResearchToolsModel,tool
-    from langchain_core.messages import ToolMessage
-    from openpyxl import Workbook
-    store,_=paper;before=store.snapshot()
-    folder=store.root/'attachment';folder.mkdir(exist_ok=True)
-    book=Workbook();sheet=book.active;sheet.title='名单'
-    sheet.append(['姓名','队伍']);sheet.append(['同名学生','A队']);sheet.append(['同名学生','B队'])
-    book.save(folder/'名单.xlsx')
-    record,_=comments.create(store,'lookup','他们在两支队伍吗？在哪？')
-    calls=[];failed=[False]
-    async def unavailable(self,query,**kwargs):
-        return {'sources':[],'search':{'status':'failed','errors':[{'message':'检索服务不可用'}]}}
-    monkeypatch.setattr('ai_system.research.literature.LiteratureService.search',unavailable)
-    def respond(messages):
-        observations=[m for m in messages if isinstance(m,ToolMessage)]
-        if len(observations)==0:return tool('search_literature',{'query':'队伍名单'},'search')
-        if len(observations)==1:
-            assert observations[-1].status=='error' and '检索服务不可用' in observations[-1].content
-            return tool('run_python',{'code':"import pandas as pd; df=pd.read_excel('attachment/错误.xlsx')"},'bad-path')
-        if len(observations)==2:
-            assert observations[-1].status=='error'
-            return tool('run_python',{'code':"import pandas as pd; df=pd.read_excel('attachment/名单.xlsx', sheet_name='名单'); print(df.to_string(index=False))"},'read')
-        if len(observations)==3:
-            return tool('run_python',{'code':"print('Excel行号:', (df.index+2).tolist()); print('不同队伍数:', df['队伍'].nunique())"},'check')
-        assert '不同队伍数: 2' in observations[-1].content
-        if not failed[0]:failed[0]=True;raise RuntimeError('reply unavailable')
-        return tool('CommentReply',{'answer':'附件名单.xlsx 的名单工作表，第2、3行分属A队、B队；姓名相同，尚不能确认同一人。'})
-    model=ResearchToolsModel(respond=respond)
-    with pytest.raises(RuntimeError,match='reply unavailable'):run(comments.execute(store,record['id'],model))
-    saved=project.read_records(store,'paper_executions')[0]
-    assert [s['state'] for s in saved['steps']]==['failed','failed','completed','completed']
-    assert 'reply unavailable' in saved['error']
-    assert len(list((workspace_path(store.root/'experiments/paper-comments/lookup', 'runs')).iterdir()))==3
-    result=run(comments.execute(store,record['id'],model,resume=True))
-    assert result['state']=='completed' and '第2、3行' in result['answer']
-    assert len(result['steps'])==4 and len(list((workspace_path(store.root/'experiments/paper-comments/lookup', 'runs')).iterdir()))==3
-    assert not project.read_records(store,'paper_changes')
-    assert store.snapshot()['executions']==before['executions'] and store.snapshot()['artifacts']==before['artifacts']
-    for step in result['steps'][2:]:
-        assert workspace_path(store.root, step['result']['code_path']).is_file() and workspace_path(store.root, step['result']['stdout_path']).is_file()
-    assert any(c['key'].startswith('Elookup_') for c in paper_sources.cards(store))
 
 
 def test_latex_compile_failure_keeps_old_pdf_and_source(paper,monkeypatch):
@@ -174,19 +130,15 @@ def test_comment_and_source_routes_keep_owner_guard_and_accept_drafts(paper,monk
     app.dependency_overrides[get_db]=lambda:SimpleNamespace(close=lambda:None)
     monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(architecture_version=2, created_by=7,output_mode='markdown'))
     monkeypatch.setattr(workspace.workspace_file_service,'get_workspace_path',lambda *args:store.root)
-    from research_tools_helpers import ResearchToolsModel,tool
-    model=ResearchToolsModel(respond=lambda messages:tool('CommentReply',{'answer':'已解释选区。'}))
-    monkeypatch.setattr(workspace,'_paper_writing_model',lambda *args:model)
     with TestClient(app) as client:
         doc=client.get('/api/workspace/work/paper/project').json()
         bound=selection(store,'原来的表述')
         body={'research_id':store.research_id,'request_id':'api-comment','message':'请解释','selection':bound}
-        assert client.post('/api/workspace/work/paper/comments',json=body).status_code==202
-        assert client.post('/api/workspace/work/paper/comments',json=body).status_code==202
+        assert client.post('/api/workspace/work/paper/comments',json=body).status_code==404
+        assert client.post('/api/workspace/work/paper/comments',json=body).status_code==404
         doc=client.get('/api/workspace/work/paper/project').json()
-        assert len(doc['executions'])==1 and len(doc['threads'])==1
-        assert doc['executions'][0]['state']=='completed'
+        assert doc['executions']==[] and doc['threads']==[]
         assert client.post('/api/workspace/work/paper/locate',json={'quote':'原来的表述'}).json()['confirmation_required']
         monkeypatch.setattr(workspace.crud,'get_work',lambda *args:SimpleNamespace(architecture_version=2, created_by=8))
         assert client.get('/api/workspace/work/paper/project').status_code==403
-        assert client.post('/api/workspace/work/paper/comments',json=body).status_code==403
+        assert client.post('/api/workspace/work/paper/locate',json={'quote':'原来的表述'}).status_code==403

@@ -23,6 +23,35 @@ class AssetInput(Inputs):
     destination: str = Field(description='论文内使用的新路径，如figures/forecast.png；不得覆盖已有不同文件。')
 
 
+class ReferenceEdit(Inputs):
+    reference: int = Field(ge=0, description='本轮论文引用的reference编号')
+    replacement: str = Field(max_length=100000)
+
+
+class ReferenceEdits(Inputs):
+    edits: list[ReferenceEdit] = Field(min_length=1, max_length=24)
+
+
+async def propose_edits(ctx, inputs):
+    turn = ctx.research.snapshot().get('conversation_input') or {}
+    context = turn.get('paper_context')
+    if not context:
+        raise ValueError('本轮没有论文引用，请先选择需要修改的源码')
+    project.initialize(ctx.research)
+    patches=[]
+    for edit in inputs['edits']:
+        if edit['reference'] >= len(context['references']):
+            raise ValueError('reference不属于本轮引用')
+        selection=context['references'][edit['reference']].get('selection')
+        if not selection:
+            raise ValueError('阅读引用没有确认的源码范围，不能猜测位置；请用户选择源码')
+        project.current_selection(ctx.workspace,selection)
+        patches.append({**selection,'replacement':edit['replacement']})
+    change=project.propose_change(ctx.research,context.get('thread_id') or 'chat',turn['id'],patches)
+    return CapabilityProduct('paper',{'change_id':change['id'],'status':'pending',
+        'message':'修改集已提出，等待用户接受；论文尚未修改'})
+
+
 class PreviewInput(Inputs):
     source_version: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$',description='省略时编译当前正文；指定时只读已编译的历史版本。')
     pdf_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$',description='复核子任务传入固定PDF哈希，保证复核同一产物。')
@@ -114,6 +143,8 @@ def tool_content(ctx, value, llm):
 
 
 def register(registry):
+    registry.register('writing','writing.propose_edits','paper',propose_edits,ReferenceEdits,model_callable=True,
+        purpose='用户要求修改本轮论文引用时，按reference编号提出版本化修改集，等待用户接受。无确认源码范围时不能猜测位置。')
     registry.register('writing','writing.use_asset','paper',use_asset,AssetInput,model_callable=True,
         purpose='把选定结果复制为固定版本的论文图片、表格或代码依赖，返回实际引用路径；保留来源，不覆盖旧版本。')
     registry.register('writing','writing.preview','paper',preview,PreviewInput,model_callable=True,

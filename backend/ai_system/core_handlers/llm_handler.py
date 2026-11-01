@@ -4,7 +4,7 @@ LLM处理器 - LangChain 重构版本
 """
 
 import logging
-from typing import Optional, Any, Dict
+from typing import Optional, Any
 from langchain_core.language_models import BaseLanguageModel
 
 from .llm_providers import LLMProviderFactory, create_llm_from_model_config
@@ -82,43 +82,6 @@ class LLMHandler:
         """
         return self.llm
 
-    def set_model(self, model: str, provider: Optional[str] = None, **kwargs):
-        """
-        设置LLM模型和提供商
-
-        Args:
-            model: 模型ID
-            provider: AI提供商名称（可选，默认使用当前提供商）
-            **kwargs: 其他LLM参数
-        """
-        self.model = model
-        if provider:
-            self.provider = provider
-
-        # 构建配置并创建新的LLM实例
-        config = {
-            'provider': self.provider or 'openai',
-            'model_id': model,
-            'api_key': kwargs.get('api_key', ''),
-            'base_url': kwargs.get('base_url', ''),
-            'is_active': True
-        }
-
-        # 更新LLM参数
-        llm_params = {**self.llm_kwargs, **kwargs}
-        self.llm = LLMProviderFactory.create_llm_instance(config, **llm_params)
-        logger.info(f"LLM已更新，提供商: {self.provider}, 模型: {model}")
-
-    def get_model_info(self) -> Dict[str, Any]:
-        """获取当前模型信息"""
-        return {
-            "provider": self.provider,
-            "model": self.model,
-            "stream_manager_configured": self.stream_manager is not None,
-            "langchain_based": True,
-            "simplified": True,
-            "supported_providers": LLMProviderFactory.get_supported_providers()
-        }
 
     async def close(self):
         """清理资源"""

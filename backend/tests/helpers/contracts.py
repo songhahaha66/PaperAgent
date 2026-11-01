@@ -3,7 +3,7 @@ from services.file_services.workspace_layout import workspace_path
 from pathlib import Path
 from ai_system.research.store import ResearchStore
 from ai_system.research.models import Assumption, DomainCheck, Requirement, ResultSelector, WorkerResult
-from ai_system.graph.state import Subproblem
+from helpers.legacy_graph import Subproblem
 from helpers.graph import ProblemAnalysis
 
 

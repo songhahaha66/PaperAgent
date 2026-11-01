@@ -4,7 +4,6 @@ from services.file_services.workspace_layout import workspace_path
 
 from ai_system.research.domain import findings as research_findings
 import json
-from contextlib import closing
 from typing import Literal
 from pydantic import BaseModel,Field
 from ai_system.research.models import ResearchConflict

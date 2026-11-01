@@ -22,6 +22,7 @@ from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.graph.message_graph import build_message_graph, MessageContext
+from services.chat_services.paper_references import validate_context
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
 from config.paths import get_workspace_path
@@ -46,19 +47,6 @@ def set_work_status(work_id: str, status: str) -> None:
 
 
 router = APIRouter(prefix="/api/chat", tags=["聊天系统"])
-
-# 全局变量用于存储app实例的引用（在WebSocket中使用）
-_app_instance = None
-
-def set_app_instance(app):
-    """设置app实例引用，供WebSocket使用"""
-    global _app_instance
-    _app_instance = app
-
-def get_app_instance():
-    """获取app实例引用"""
-    return _app_instance
-
 
 from services.chat_services.connections import ConnectionManager
 
@@ -243,7 +231,7 @@ async def pause_work(
 
 
 async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
-                             subproblem_id, revision_command, original_status, task, source_issue=None):
+                             subproblem_id, revision_command, original_status, task, source_issue=None, paper_context=None):
     """Own all execution resources independently of the submitting browser."""
     loop = asyncio.get_running_loop()
     ws_callback = None
@@ -259,8 +247,6 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                 env_manager = setup_environment_from_db(db, workspace_dir)
                 workspace_dir = env_manager.get_workspace_dir()
                 model_config = env_manager.config_manager.get_model_config('brain', user_id)
-                code_config = None if action == 'ask' else env_manager.config_manager.get_model_config('code', user_id)
-                writer_config = None if action == 'ask' else env_manager.config_manager.get_model_config('writing', user_id)
                 template_id, output_mode = None, 'markdown'
                 try:
                     from services.data_services.crud import get_work
@@ -270,12 +256,11 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                         output_mode = getattr(work, 'output_mode', None) or output_mode
                 except Exception as exc:
                     logger.warning('获取工作配置失败: %s', exc)
-                return chat_service, workspace_dir, model_config, code_config, writer_config, template_id, output_mode
+                return chat_service, workspace_dir, model_config, template_id, output_mode
             finally:
                 db.close()
 
-        (chat_service, workspace_dir, model_config, codeagent_model_config,
-         writer_model_config, template_id, output_mode) = await loop.run_in_executor(None, init_message_processing)
+        (chat_service, workspace_dir, model_config, template_id, output_mode) = await loop.run_in_executor(None, init_message_processing)
         # Only file-backed history operations remain after initialization.
         chat_service.db_session = None
 
@@ -329,9 +314,6 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             async def on_content(self, content):
                 self.writer.text(content)
 
-            async def on_message_complete(self, role, content):
-                self.writer.flush()
-
             async def on_json_block(self, block, *, snapshot=False):
                 if not snapshot and block.get('type') in {'research_state','research_activity'}:
                     self.research_push.schedule()
@@ -376,38 +358,9 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             **({"max_tokens": 3000} if action == "ask" else {}),
         )
 
-        # 求解阶段的模型（"code" 配置）
-        codeagent_llm = None
-        if codeagent_model_config and action != "ask":
-            from ai_system.core_handlers.llm_providers import create_llm_from_model_config
-            try:
-                codeagent_llm = create_llm_from_model_config(codeagent_model_config)
-                logger.info("求解阶段使用模型: %s", codeagent_model_config.model_id)
-            except Exception as e:
-                logger.error(f"创建 code 配置模型失败: {e}")
-                codeagent_llm = llm_handler.get_llm_instance()
-        else:
-            logger.info("未提供codeagent配置，使用主LLM")
-            codeagent_llm = llm_handler.get_llm_instance()
-
-        # 获取writer的LLM实例（从"writing"配置加载）
-        writer_llm = None
-        if writer_model_config and action != "ask":
-            from ai_system.core_handlers.llm_providers import create_llm_from_model_config
-            try:
-                writer_llm = create_llm_from_model_config(writer_model_config)
-                logger.info("写作阶段使用模型: %s", writer_model_config.model_id)
-            except Exception as e:
-                logger.error(f"创建 writing 配置模型失败: {e}")
-                writer_llm = None
-        else:
-            logger.info("未提供 writing 配置，写作使用主模型")
-            writer_llm = None
-
-        logger.info(f"工作 {work_id} 使用状态图流水线，输出 {output_mode}")
         from services.research_experience import ExperienceScope
         turn = await asyncio.to_thread(chat_service.history_manager.begin_turn, work_id,
-                                       'user:' + (task.request_id or task.task_id), problem)
+                                       'user:' + (task.request_id or task.task_id), problem, paper_context)
         history = await asyncio.to_thread(chat_service.get_work_chat_history, work_id, 10)
         history = [m for m in history if m.get('id') != turn['id']][-8:]
 
@@ -427,6 +380,8 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                     nonlocal action, subproblem_id, revision_command
                     selected = route['action']
                     scope = route['scope']
+                    if paper_context:
+                        await asyncio.to_thread(validate_context, workspace_dir, snapshot.research_id, paper_context)
                     if selected == 'ask':
                         scoped_snapshot(snapshot, scope)
                     if selected not in {'ask', 'clarify'}:
@@ -464,21 +419,32 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                             await answer_research_question(
                                 llm_handler.get_llm_instance(), stream_manager, snapshot, workspace_dir,
                                 problem, history, subproblem_id,
-                                destination_url=getattr(model_config, 'base_url', '') or '')
+                                paper_context=paper_context)
                         return
+                    def load_code_model():
+                        db = next(get_db())
+                        try:
+                            config = setup_environment_from_db(db, workspace_dir).config_manager.get_model_config('code', user_id)
+                        except ValueError:
+                            return llm_handler.get_llm_instance()
+                        finally:
+                            db.close()
+                        from ai_system.core_handlers.llm_providers import create_llm_from_model_config
+                        return create_llm_from_model_config(config) if config else llm_handler.get_llm_instance()
+                    code_model = await asyncio.to_thread(load_code_model)
                     main_agent = PaperGraphAgent(llm_handler.get_llm_instance(), stream_manager,
-                        workspace_dir, work_id, template_id, codeagent_llm, output_mode=output_mode,
-                        writer_llm=writer_llm, experience_scope=ExperienceScope(user_id, work_id))
+                        workspace_dir, work_id, template_id, code_model, output_mode=output_mode,
+                        experience_scope=ExperienceScope(user_id, work_id))
                     if action == 'revise_research':
                         options = {'replace_pending': True} if requested_action == 'auto' else {}
-                        await main_agent.revise_research(change=problem, **revision_command.model_dump(), **options)
+                        await main_agent.revise_research(change=problem, **revision_command.model_dump(), paper_context=paper_context, **options)
                     elif action == 'message':
                         question_id = subproblem_id
                         experiment = next((e for e in snapshot.experiments if e['task_id'] == question_id), None)
                         if experiment:
                             question_id = experiment.get('question_id')
                         await main_agent.send_message(problem, question_id=question_id,
-                                                      message_id=turn['id'], history=history, replace_pending=True)
+                                                      message_id=turn['id'], history=history, replace_pending=True, paper_context=paper_context)
                     elif action == 'resume':
                         await main_agent.resume_failed()
                     else:
@@ -489,7 +455,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                 await build_message_graph().ainvoke({}, context=MessageContext(
                     llm=llm_handler.get_llm_instance(), workspace=workspace_dir, snapshot=snapshot,
                     message=problem, history=history, scope=subproblem_id, requested_action=requested_action,
-                    history_manager=chat_service.history_manager, work_id=work_id, turn=turn, execute=execute))
+                    history_manager=chat_service.history_manager, work_id=work_id, turn=turn, execute=execute, paper_context=paper_context))
 
                 # 停在"确认建模方案"时工作是待确认，不是已完成
                 failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
@@ -725,6 +691,8 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
                 if action == "ask":
                     subproblem_id = subproblem_id or infer_question_scope(problem, snapshot)
                     scoped_snapshot(snapshot, subproblem_id)
+                paper_context = (await asyncio.to_thread(validate_context, get_workspace_path(work_id), snapshot.research_id, message_data['paper_context'])
+                                 if message_data.get('paper_context') is not None else None)
                 source_issue = (SourceIssueReference.model_validate(message_data['source_issue'])
                                 if message_data.get('source_issue') is not None else None)
             except ValueError as exc:
@@ -740,7 +708,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             task.request_id = request_id
             ai_task = asyncio.create_task(_execute_chat_task(
                 work_id, user_id, problem, action, snapshot, subproblem_id,
-                revision_command, original_status, task, source_issue))
+                revision_command, original_status, task, source_issue, paper_context))
             task_manager.set_async_task(work_id, ai_task)
 
     except WebSocketDisconnect:

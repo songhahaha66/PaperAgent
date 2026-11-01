@@ -248,7 +248,7 @@
                 class="error"
               >
                 {{ execution.error || '上次处理被中断，已保存原稿与完成步骤。'
-                }}<button :disabled="busy" @click="resume(execution.id)">继续未完成的步骤</button>
+                }}<span>请在主对话中继续处理。</span>
               </p>
               <details v-if="execution.steps?.length">
                 <summary>核查记录<span>{{ execution.steps.length }} 步</span></summary>
@@ -426,8 +426,6 @@ const emit = defineEmits<{
   'open-file': [path: string]
   updated: []
   artifact: []
-  ask: [message: string, task?: string]
-  research: [message: string, task?: string, issue?: { id: string; version: string }]
   quote: [context: PaperComposerContext]
 }>()
 const project = ref<PaperProject | null>(null)
@@ -459,8 +457,7 @@ const loading = ref(false),
   threadId = ref(''),
   sourceCard = ref<PaperSource | null>(null)
 let generation = 0,
-  locateGeneration = 0,
-  timer: ReturnType<typeof setTimeout> | undefined
+  locateGeneration = 0
 const selectedFile = computed(() => project.value?.files.find((row) => row.path === file.value))
 const dirty = computed(() => draft.value !== draftBase.value)
 const isLatex = computed(() => project.value?.main.endsWith('.tex') ?? props.latex)
@@ -905,18 +902,6 @@ async function decide(id: string, decision: string) {
     busy.value = false
   }
 }
-async function resume(id: string) {
-  if (!project.value) return
-  busy.value = true
-  try {
-    await paperProjectAPI.resume(props.workId, id, project.value.research_id)
-    await load()
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : '暂时无法继续。'
-  } finally {
-    busy.value = false
-  }
-}
 async function compile() {
   if (!project.value) return
   compiling.value = true
@@ -939,7 +924,6 @@ async function load() {
   const seq = ++generation,
     work = props.workId
   loading.value = true
-  if (timer) clearTimeout(timer)
   try {
     const value = await paperProjectAPI.read(work)
     if (seq !== generation || work !== props.workId) return
@@ -950,8 +934,6 @@ async function load() {
       file.value = value.main
       loadDraft()
     } else if (!wasDirty) resetDraft()
-    if (value.executions.some((row) => row.state === 'pending' || row.state === 'running'))
-      timer = setTimeout(load, 2000)
   } catch (cause) {
     if (seq === generation)
       error.value = cause instanceof Error ? cause.message : '暂时无法读取论文。'
@@ -1012,7 +994,6 @@ watch(
 onBeforeUnmount(() => {
   generation++
   locateGeneration++
-  if (timer) clearTimeout(timer)
 })
 </script>
 <style scoped>
