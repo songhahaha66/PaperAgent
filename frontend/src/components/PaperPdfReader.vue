@@ -23,7 +23,7 @@ import {
   type PDFDocumentProxy,
   type PDFDocumentLoadingTask,
 } from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import workerUrl from 'virtual:pdf-worker-url'
 import { useAuthStore } from '@/stores/auth'
 GlobalWorkerOptions.workerSrc = workerUrl
 const props = defineProps<{ workId: string; version?: string }>()

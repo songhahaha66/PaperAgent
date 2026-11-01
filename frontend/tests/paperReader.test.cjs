@@ -12,7 +12,7 @@ async function pdfFixture() {
   const mod=await loadModule('src/components/PaperPdfReader.vue', {
     vue,
     '@/stores/auth':{useAuthStore:()=>({token:'test-token'})},
-    'pdfjs-dist/build/pdf.worker.min.mjs?url':{default:'worker.js'},
+    'virtual:pdf-worker-url':{default:'worker.js'},
     'pdfjs-dist':{
       GlobalWorkerOptions:{},TextLayer:class {},
       getDocument:({data})=>{
