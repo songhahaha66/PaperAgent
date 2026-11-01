@@ -9,6 +9,45 @@ from ai_system.sandbox.settings import SandboxSettings
 from helpers.process_jobs import ProcessJobs
 
 
+@pytest.mark.parametrize('operation', ['status', 'stop'])
+def test_job_rpc_keeps_bootstrap_banner_out_of_json(tmp_path, operation):
+    async def check():
+        session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server with spaces')
+        value = await session._job_rpc(operation, 'run-banner')
+        assert value['job_id'] == 'run-banner'
+        code, out, err = session.rpc_outputs[-1]
+        assert code == 0 and json.loads(out) == value
+        assert 'Switched to Python Python 3.11.15' in err
+        assert 'Switched to Python' not in out
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('operation', ['submit', 'status', 'stop'])
+def test_job_rpc_bootstrap_failure_preserves_diagnostics_and_skips_worker(tmp_path, operation):
+    async def check():
+        session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server')
+        session.bootstrap.write_text('echo "environment setup failed"\necho "detail" >&2\nreturn 23\n')
+        with pytest.raises(RuntimeError, match='environment setup failed\ndetail'):
+            await session._job_rpc(operation, 'run-failed')
+        assert session.rpc_outputs[-1] == (23, '', 'environment setup failed\ndetail\n')
+        assert not (session.remote / '.pa-jobs').exists()
+    asyncio.run(check())
+
+
+@pytest.mark.parametrize('receipt, error', [
+    ('not JSON', json.JSONDecodeError),
+    ('{"job_id": "another-job"}', ValueError),
+    ('{"job_id": "run-invalid"}\ntrailing output', json.JSONDecodeError),
+])
+def test_job_rpc_rejects_invalid_worker_receipts(tmp_path, receipt, error):
+    async def check():
+        session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server')
+        session.helper.write_text(f'print({receipt!r})\n')
+        with pytest.raises(error):
+            await session._job_rpc('status', 'run-invalid')
+    asyncio.run(check())
+
+
 def test_lost_submit_and_poll_replies_do_not_replay_code_and_processes_are_fresh(tmp_path):
     async def check():
         session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server')
@@ -27,6 +66,8 @@ def test_lost_submit_and_poll_replies_do_not_replay_code_and_processes_are_fresh
             assert '开始' in result.stdout and '警告' in result.stdout and '42' in result.stdout
             assert (session.backend_root / 'outputs/count.txt').read_text() == '1'
             assert sum(op == 'submit' for op, _ in session.operations) == 2
+            assert all('Switched to Python' not in out and 'Switched to Python' in err
+                       for _, out, err in session.rpc_outputs)
             receipt = json.loads((kernel.fs.run_dir(result.run_id) / 'done.json').read_text())
             assert receipt['exit_code'] == 0 and receipt['job_id'] == result.run_id
             assert any(e['type'] == 'output' for e in events)

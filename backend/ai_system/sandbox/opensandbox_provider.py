@@ -313,7 +313,9 @@ class OpenSandboxSession:
         argv = ['python', '-u', '/tmp/paperagent_job.py', operation, self.root, run_id]
         if argument is not None:
             argv.append(json.dumps(argument) if isinstance(argument, dict) else argument)
-        command = 'source /opt/code-interpreter/code-interpreter-env.sh python 3.11 && ' + shlex.join(argv)
+        # The image's environment script prints a version banner. Keep bootstrap
+        # diagnostics on stderr so stdout contains only the worker's JSON receipt.
+        command = 'source /opt/code-interpreter/code-interpreter-env.sh python 3.11 >&2 && ' + shlex.join(argv)
         code, out, err = await self.command('bash -c ' + shlex.quote(command), 10, max_output_bytes=512 * 1024)
         if code != 0:
             raise RuntimeError('任务状态操作失败：' + err[:1000])

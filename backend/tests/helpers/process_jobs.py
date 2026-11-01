@@ -3,8 +3,8 @@
 Only trusted test snippets run locally. This does not register an app provider.
 """
 import asyncio
-import json
 from pathlib import Path
+import shlex
 import shutil
 import sys
 from types import SimpleNamespace
@@ -39,6 +39,11 @@ class ProcessJobs(RemoteFiles):
         self.closes = 0
         self.helper = Path(server) / 'helpers' / 'paperagent_job.py'
         self.helper.parent.mkdir(parents=True, exist_ok=True)
+        self.bootstrap = self.helper.with_name('code-interpreter-env.sh')
+        self.bootstrap.write_text(
+            'export PATH=' + shlex.quote(str(Path(sys.executable).parent)) + ':"$PATH"\n'
+            'echo "Switched to Python Python 3.11.15"\n')
+        self.rpc_outputs = []
         shutil.copyfile(job_worker.__file__, self.helper)
         shutil.copyfile(Path(job_worker.__file__).with_name('runtime_helpers.py'),
                         self.helper.with_name('paperagent_runtime.py'))
@@ -62,23 +67,31 @@ class ProcessJobs(RemoteFiles):
         if op == 'status' and self.read_failures:
             self.read_failures -= 1
             raise ConnectionError('mock status reply lost')
-        args = [sys.executable, '-u', str(self.helper), op, self.root, run_id]
-        if argument is not None:
-            args.append(json.dumps(argument) if isinstance(argument, dict) else argument)
+        value = await OpenSandboxSession._job_rpc(self, op, run_id, argument)
+        if op == 'submit' and self.lost_submit_reply:
+            self.lost_submit_reply = False
+            raise ConnectionError('submission succeeded but reply was lost')
+        return value
+
+    async def command(self, command, timeout, *, max_output_bytes=None):
+        # Exercise the production shell/RPC boundary; only relocate the image's
+        # installed helpers into this test's isolated filesystem.
+        args = shlex.split(command)
+        assert args[:2] == ['bash', '-c'] and len(args) == 3
+        args[2] = args[2].replace('/opt/code-interpreter/code-interpreter-env.sh',
+                                 shlex.quote(str(self.bootstrap)))
+        args[2] = args[2].replace('/tmp/paperagent_job.py', shlex.quote(str(self.helper)))
         proc = await asyncio.create_subprocess_exec(*args, stdout=asyncio.subprocess.PIPE,
                                                    stderr=asyncio.subprocess.PIPE)
         try:
-            out, err = await proc.communicate()
+            out, err = await asyncio.wait_for(proc.communicate(), timeout)
         finally:
             if proc.returncode is None:
                 proc.kill()
                 await proc.wait()
-        if proc.returncode:
-            raise RuntimeError(err.decode())
-        if op == 'submit' and self.lost_submit_reply:
-            self.lost_submit_reply = False
-            raise ConnectionError('submission succeeded but reply was lost')
-        return json.loads(out)
+        result = (proc.returncode, out.decode(), err.decode())
+        self.rpc_outputs.append(result)
+        return result
 
     async def close(self):
         self.closes += 1
