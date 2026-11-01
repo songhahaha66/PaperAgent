@@ -1,6 +1,7 @@
 import type { ResearchActivity } from '@/types/research'
 export interface ExecutionDetail extends ResearchActivity {
   detail?: string
+  warnings?: string[]
   script_file?: string | null
   error_file?: string | null
   research_id?: string

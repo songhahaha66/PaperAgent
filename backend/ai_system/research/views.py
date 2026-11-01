@@ -8,6 +8,9 @@ from ai_system.graph.registry import find_refs
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
     'research.update_plan':'更新研究计划',
+    'research.list_files':'查看工作区文件','research.search_files':'搜索工作区文件',
+    'research.materialize_artifact':'准备计算输入','research.inspect_runtime':'查看沙箱状态','research.reset_runtime':'重置沙箱',
+    'writing.preview':'预览论文 PDF','writing.use_asset':'引用论文素材','writing.propose_edits':'提出论文修改',
     'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用失败',
@@ -283,6 +286,15 @@ def activity_progress(ctx, item):
     from services.chat_services.conversation_timeline import execution_boundary
     execution_boundary(store.root, store.research_id, 'activity', item)
     notify_runtime()
+
+
+def activity_metadata(ctx, capability, **output):
+    """Enrich the existing tool row; direct helper calls create no extra activity."""
+    owner = _ACTIVITY_OWNER.get()
+    if owner and owner[0] is ctx and owner[1]['capability'] == capability:
+        item = owner[1]
+        item['output'] = {**item.get('output', {}), **output}
+        activity_progress(ctx, item)
 
 @contextmanager
 def activity(ctx, capability, task_id=None, *, reuse_parent=None, **links):

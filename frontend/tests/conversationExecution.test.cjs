@@ -96,6 +96,24 @@ test('streaming output preserves manual expansion', async (t) => {
   assert.doesNotMatch(text(host.root), /third print/, 'stdout can be folded again')
 })
 
+test('preview details stay folded until the operation is expanded', async (t) => {
+  const { state, host, heading } = await mount(t)
+  state.segments = [row('completed', {
+    label: '编译并预览论文 PDF', capability: 'writing.preview',
+    detail: '第 6–9 页；共 17 页；1 条编译警告', warnings: ['Overfull box'],
+    output_tail: 'raw output',
+  })]
+  await flush()
+  assert.doesNotMatch(text(host.root), /第 6–9 页|Overfull box|raw output|writing.preview/)
+  heading().props.onClick()
+  await flush()
+  assert.match(text(host.root), /Overfull box/)
+  assert.match(text(host.root), /第 6–9 页；共 17 页/)
+  assert.doesNotMatch(text(host.root), /工具：|writing.preview/)
+  assert.match(text(host.root), /raw output/)
+  assert.equal((text(host.root).match(/第 6–9 页/g) || []).length, 1)
+})
+
 test('live finish rejects stale fetches and keeps file/result links', async (t) => {
   const { state, host, heading, button, opened, results, response } = await mount(t)
   heading().props.onClick()
@@ -191,7 +209,7 @@ test('single execution has one heading, duration and output entry', async (t) =>
   assert.equal((text(host.root).match(/33 秒/g) || []).length, 1)
   assert.match(text(host.root), /10 files checked/)
   assert.doesNotMatch(text(host.root), /本次代码|展开输出|错误输出|1 次操作/)
-  assert.ok(button('代码') && button('完整日志'))
+  assert.ok(button('查看执行代码') && button('完整日志'))
   button('result.xlsx').props.onClick()
   assert.deepEqual(opened, ['outputs/result.xlsx'])
   assert.equal(button('诊断日志'), undefined, 'empty diagnostics have no entry')
@@ -215,7 +233,7 @@ test('each grouped operation folds its own logs and retains code links', async (
   await flush()
   assert.match(text(host.root), /hour 00:00/)
   assert.doesNotMatch(text(host.root), /constraints checked/)
-  button('代码').props.onClick()
+  button('查看执行代码').props.onClick()
   button('完整日志').props.onClick()
   assert.deepEqual(opened, ['code/summary.py', 'runs/summary/stdout.log'])
   step('segment').props.onClick()
