@@ -440,3 +440,26 @@ h6 {
   transform-origin: 50% 50%;
   animation: t-spin 0.8s linear infinite;
 }
+
+/* Keep loading messages quiet and proportionate inside content panels. */
+.t-loading:has(> .t-loading__text) {
+  color: var(--pa-muted);
+  font-size: 16px;
+}
+
+.t-loading:has(> svg.t-loading__gradient):has(> .t-loading__text)::before {
+  border-color: var(--pa-line-strong);
+  border-top-color: var(--pa-accent);
+}
+
+.t-loading > .t-loading__text {
+  margin-left: 8px;
+  color: var(--pa-muted);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .t-loading:has(> svg.t-loading__gradient)::before {
+    animation-duration: 2s;
+  }
+}

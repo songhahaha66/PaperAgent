@@ -10,6 +10,7 @@
       </div>
 
       <t-form
+        :key="isLogin ? 'login' : 'register'"
         ref="formRef"
         :data="formData"
         :rules="rules"
@@ -102,7 +103,6 @@
           {{ t('login.hasAccount') }}
           <t-link theme="primary" @click="switchMode">{{ t('login.signInNow') }}</t-link>
         </p>
-        <p v-if="isLogin" class="passkey-hint">{{ t('login.passkeyHint') }}</p>
         <details v-if="isLogin && originHint" class="passkey-help">
           <summary>
             {{ locale.startsWith('zh') ? '关于通行密钥登录' : 'About passkey sign-in' }}

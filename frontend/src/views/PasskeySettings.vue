@@ -38,7 +38,7 @@
             :columns="columns"
             row-key="id"
             :loading="loading"
-            empty="还没有 Passkey。添加后即可在登录页使用指纹、面容或安全密钥。"
+            empty="暂无 Passkey"
           >
             <template #backed_up="{ row }">
               <t-tag :theme="row.backed_up ? 'success' : 'default'" variant="light">

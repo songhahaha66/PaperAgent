@@ -243,7 +243,7 @@
             </t-tab-panel>
             <t-tab-panel value="analysis" label="系统解读">
               <div v-if="templateAnalysisLoading" class="loading-container">
-                <t-loading size="medium" text="正在读取上传阶段解析结果..." />
+                <t-loading size="medium" text="正在加载模板解读..." />
               </div>
               <div
                 v-else-if="templateAnalysisError && !templateAnalysis?.contract"
@@ -254,10 +254,6 @@
                 <p>{{ templateAnalysisError }}</p>
               </div>
               <div v-else-if="templateAnalysis" class="analysis-preview">
-                <p class="analysis-hint">
-                  上传时已完成静态解析。写作阶段只读取当前 paper.docx
-                  的实时状态，不再重复扫描原始模板。
-                </p>
                 <div class="analysis-meta">
                   <t-space>
                     <span>状态: {{ templateAnalysis.status }}</span>
@@ -629,7 +625,7 @@ const saveTemplate = async () => {
         )
 
         console.log('模板创建成功:', newTemplate)
-        MessagePlugin.success('模板创建成功，系统已解析模板骨架')
+        MessagePlugin.success('模板创建成功')
       } catch (error: any) {
         console.error('模板创建失败:', error)
         const errorMessage = error?.message || '模板创建失败'
@@ -869,13 +865,6 @@ onMounted(() => {
 
 .content-tabs {
   min-height: 400px;
-}
-
-.analysis-hint {
-  margin: 0 0 12px;
-  color: var(--pa-muted);
-  font-size: 13px;
-  line-height: 1.6;
 }
 
 .analysis-meta {

@@ -58,7 +58,9 @@
       </section>
     </template>
   </t-popup>
-  <ProfileSettings v-if="showProfile" @close="closeProfile" />
+  <Teleport to="body">
+    <ProfileSettings v-if="showProfile" @close="closeProfile" />
+  </Teleport>
 </template>
 <script setup lang="ts">
 import { computed, ref, useId } from 'vue'
