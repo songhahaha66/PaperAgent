@@ -15,7 +15,7 @@ import json
 import sqlite3
 
 from database.database import get_db
-from auth.auth import get_current_user, verify_token
+from auth.auth import get_current_user, verify_token, is_active_user
 from services.chat_services.chat_service import ChatService
 from services.chat_services.task_manager import task_manager
 from ai_system.config.environment import setup_environment_from_db
@@ -577,6 +577,21 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             await websocket.close()
             return
 
+        def account_active():
+            db = next(get_db())
+            try:
+                return is_active_user(db, user_id)
+            finally:
+                db.close()
+
+        async def authorized():
+            return await asyncio.to_thread(account_active)
+
+        if not await authorized():
+            await websocket.send_json({'type': 'error', 'message': '无效的认证token'})
+            await websocket.close(code=1008)
+            return
+
         # 验证work权限
         loop = asyncio.get_running_loop()
 
@@ -605,7 +620,7 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
         # Subscribe before acknowledging auth. The snapshot and replay are queued
         # without network awaits, so live events cannot fall through the join gap.
-        manager.register(work_id, websocket)
+        manager.register(work_id, websocket, authorize=authorized)
         task_status = task_manager.get_task_status(work_id)
         running_task = task_manager.get_task(work_id) if task_status.get('status') in {'pending', 'running'} else None
         await manager.send_to(work_id, websocket, {
@@ -616,11 +631,14 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
         if running_task:
             same_task = auth_info.get('task_id') == running_task.task_id
             after_seq = auth_info.get('last_seq', 0) if same_task else 0
-            await manager.replay(work_id, websocket, running_task, after_seq)
+            await manager.replay(work_id, websocket, running_task, after_seq, register_if_missing=False)
 
         while True:
             # 接收用户消息
             data = await websocket.receive_text()
+            if not await authorized():
+                await websocket.close(code=1008)
+                return
             message_data = json.loads(data)
             if not isinstance(message_data, dict):
                 await manager.send_to(work_id, websocket, {'type': 'error', 'scope': 'command', 'message': '消息格式错误'})

@@ -9,6 +9,7 @@ import json
 import logging
 from weakref import WeakValueDictionary
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from .task_manager import task_manager
 
@@ -22,6 +23,7 @@ class Subscription:
     task_id: str | None = None
     cursor: int = 0
     writer: asyncio.Task | None = None
+    authorize: Callable[[], Awaitable[bool]] | None = None
 
 
 class ConnectionManager:
@@ -34,9 +36,9 @@ class ConnectionManager:
     def lock(self, work_id):
         return self._locks.setdefault(work_id, asyncio.Lock())
 
-    def register(self, work_id, websocket, cursor=0, task_id=None):
+    def register(self, work_id, websocket, cursor=0, task_id=None, authorize=None):
         self.disconnect(work_id, websocket)
-        subscription = Subscription(websocket, asyncio.Queue(self.queue_size), task_id, cursor)
+        subscription = Subscription(websocket, asyncio.Queue(self.queue_size), task_id, cursor, authorize=authorize)
         self.active_connections.setdefault(work_id, {})[websocket] = subscription
         subscription.writer = asyncio.create_task(self._write(work_id, subscription))
         return subscription
@@ -55,6 +57,10 @@ class ConnectionManager:
                 batch = await subscription.queue.get()
                 try:
                     for payload in batch:
+                        if subscription.authorize and not await subscription.authorize():
+                            self.disconnect(work_id, subscription.socket)
+                            await subscription.socket.close(code=1008)
+                            return
                         task_id, seq = payload.get('task_id'), payload.get('seq')
                         if task_id and task_id != subscription.task_id:
                             subscription.task_id, subscription.cursor = task_id, 0
@@ -104,7 +110,7 @@ class ConnectionManager:
             for subscription in list(self.active_connections.get(work_id, {}).values()):
                 self._offer(work_id, subscription, [payload])
 
-    async def replay(self, work_id, websocket, task, after_seq):
+    async def replay(self, work_id, websocket, task, after_seq, *, register_if_missing=True):
         async with self.lock(work_id):
             # A future/invalid cursor cannot suppress subsequent live events.
             last_seq = getattr(task, 'last_seq', None)
@@ -112,6 +118,8 @@ class ConnectionManager:
                 after_seq = 0
             subscription = self.active_connections.get(work_id, {}).get(websocket)
             if subscription is None:
+                if not register_if_missing:
+                    return
                 subscription = self.register(work_id, websocket, after_seq, task.task_id)
             else:
                 subscription.task_id, subscription.cursor = task.task_id, after_seq

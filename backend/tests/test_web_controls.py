@@ -82,6 +82,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
             await self.stream.send_json_block('paper_stage','Q4：求解中')
             await asyncio.Event().wait()
     monkeypatch.setattr(chat,'verify_token',lambda token:7)
+    monkeypatch.setattr(chat,'is_active_user',lambda db,user_id:True)
     monkeypatch.setattr(chat,'get_db',lambda:iter([SimpleNamespace(close=lambda:None)]))
     monkeypatch.setattr('services.data_services.crud.get_work',lambda *args:work)
     monkeypatch.setattr('services.data_services.crud.update_work_status',lambda db,w,status:setattr(work,'status',status))

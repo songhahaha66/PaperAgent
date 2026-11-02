@@ -162,6 +162,7 @@ def web(monkeypatch, tmp_path):
     monkeypatch.setattr('services.chat_services.chat_history_manager.get_workspaces_path', lambda: tmp_path)
     monkeypatch.setattr('config.paths.get_workspace_path', lambda _: root)
     monkeypatch.setattr(chat, "verify_token", lambda token: 7)
+    monkeypatch.setattr(chat, "is_active_user", lambda db, user_id: True)
     monkeypatch.setattr(chat, "get_db", lambda: iter([SimpleNamespace(close=lambda: None)]))
     monkeypatch.setattr("services.data_services.crud.get_work", lambda *args: work)
     def update(db, work_id, status):
