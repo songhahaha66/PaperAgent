@@ -8,9 +8,13 @@
       ><button @click="zoom = Math.min(2, zoom + 0.15)">＋</button>
     </header>
     <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="loading">正在加载 PDF…</p>
-    <div class="pages" ref="scroller">
-      <div ref="pageElement" class="pdf-page" @mouseup="capture" @keyup="capture"></div>
+    <div class="reader-content">
+      <div class="pages" ref="scroller">
+        <div ref="pageElement" class="pdf-page" @mouseup="capture" @keyup="capture"></div>
+      </div>
+      <div v-if="loading" class="pdf-loading" role="status" aria-live="polite">
+        <t-loading text="正在加载 PDF…" />
+      </div>
     </div>
   </section>
 </template>
@@ -229,10 +233,22 @@ button {
 button:disabled {
   opacity: 0.4;
 }
+.reader-content {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
 .pages {
   overflow: auto;
-  flex: 1;
+  height: 100%;
   padding: 15px;
+  background: var(--pa-surface-muted);
+}
+.pdf-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
   background: var(--pa-surface-muted);
 }
 .pdf-page {

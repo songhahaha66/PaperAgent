@@ -2,7 +2,8 @@
   <t-dialog
     :visible="true"
     :header="isZh ? '个人资料' : 'Profile'"
-    width="420px"
+    width="440px"
+    placement="center"
     :close-on-overlay-click="false"
     :close-on-esc-keydown="!saving"
     :close-btn="!saving"
@@ -17,23 +18,20 @@
   >
     <form class="profile-form" @submit.prevent="save">
       <div class="profile-avatar-row">
-        <span class="profile-avatar">
-          <img v-if="avatar" :src="avatar" :alt="isZh ? '头像预览' : 'Avatar preview'" />
+        <button
+          type="button"
+          class="profile-avatar"
+          :disabled="saving || reading"
+          :aria-label="isZh ? '更换头像' : 'Change profile photo'"
+          @click="fileInput?.click()"
+        >
+          <img v-if="avatar" :src="avatar" alt="" />
           <span v-else>{{ (username.trim() || '?').charAt(0).toUpperCase() }}</span>
-        </span>
-        <div>
-          <t-button variant="outline" :disabled="saving || reading" @click="fileInput?.click()">
-            {{ isZh ? '更换头像' : 'Change avatar' }}
-          </t-button>
-          <t-button
-            v-if="avatar"
-            variant="text"
-            :disabled="saving || reading"
-            @click="avatar = null"
-          >
-            {{ isZh ? '恢复默认' : 'Reset' }}
-          </t-button>
-        </div>
+          <span class="profile-avatar-overlay" aria-hidden="true">{{ isZh ? '更换' : 'Change' }}</span>
+        </button>
+        <t-button v-if="avatar" size="small" variant="text" :disabled="saving || reading" @click="avatar = null">
+          {{ isZh ? '恢复默认' : 'Reset' }}
+        </t-button>
         <input
           ref="fileInput"
           type="file"
@@ -42,26 +40,23 @@
           @change="selectAvatar"
         />
       </div>
-      <p class="profile-hint">
-        {{
-          isZh
-            ? '支持 JPG、PNG、WebP，最大 2 MB，自动居中裁剪为正方形。'
-            : 'JPG, PNG or WebP up to 2 MB. Images are center-cropped to a square.'
-        }}
-      </p>
-      <label :for="nameId">{{ isZh ? '用户名' : 'Username' }}</label>
-      <t-input
-        :id="nameId"
-        v-model="username"
-        :disabled="saving"
-        :maxlength="50"
-        :status="validName ? undefined : 'error'"
-      />
-      <p class="profile-hint">
-        {{ isZh ? '2–50 个字符，用户名不可重复。' : '2–50 characters. Usernames must be unique.' }}
-      </p>
-      <label>{{ isZh ? '登录邮箱' : 'Login email' }}</label>
-      <p class="profile-email">{{ auth.currentUser?.email }}</p>
+      <div class="profile-fields">
+        <div class="profile-field">
+          <label class="profile-field-label" :for="nameId">{{ isZh ? '用户名' : 'Username' }}</label>
+          <t-input
+            :id="nameId"
+            v-model="username"
+            :disabled="saving"
+            :maxlength="50"
+            :status="validName ? undefined : 'error'"
+          />
+          <p v-if="!validName" class="profile-hint profile-error">{{ isZh ? '请输入 2–50 个字符' : 'Enter 2–50 characters' }}</p>
+        </div>
+        <div class="profile-email-row">
+          <span class="profile-field-label">{{ isZh ? '登录邮箱' : 'Login email' }}</span>
+          <span class="profile-email">{{ auth.currentUser?.email }}</span>
+        </div>
+      </div>
       <t-alert v-if="error" theme="error" :message="error" role="alert" />
     </form>
   </t-dialog>
@@ -165,42 +160,117 @@ async function save() {
 
 <style scoped>
 .profile-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px 24px;
 }
 .profile-avatar-row {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 20px;
+  align-self: center;
+  gap: 6px;
 }
 .profile-avatar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 76px;
-  height: 76px;
+  width: 72px;
+  height: 72px;
   flex-shrink: 0;
   overflow: hidden;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
   background: var(--pa-accent-soft);
   color: var(--pa-accent);
-  font-size: 28px;
+  font: inherit;
+  font-size: 26px;
+  cursor: pointer;
 }
 .profile-avatar img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+.profile-avatar-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.profile-avatar:hover .profile-avatar-overlay,
+.profile-avatar:focus-visible .profile-avatar-overlay {
+  opacity: 1;
+}
+.profile-avatar:focus-visible {
+  outline: 2px solid var(--pa-accent);
+  outline-offset: 3px;
+}
+.profile-avatar:disabled {
+  cursor: default;
+}
+.profile-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.profile-field {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+}
+.profile-form > .t-alert {
+  grid-column: 1 / -1;
+}
+.profile-field-label {
+  color: var(--pa-ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+.profile-field :deep(.t-input__wrap) {
+  width: 100%;
+}
 .profile-hint {
   color: var(--pa-muted);
   font-size: 12px;
-  margin: 0 0 10px;
-  line-height: 1.6;
+  margin: 0;
+  line-height: 1.5;
+}
+.profile-email-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
 }
 .profile-email {
-  margin: 0 0 10px;
   color: var(--pa-muted);
+  font-size: 13px;
   overflow-wrap: anywhere;
+}
+.profile-error {
+  color: var(--pa-danger);
+}
+@media (max-width: 380px) {
+  .profile-form {
+    grid-template-columns: 1fr;
+  }
+  .profile-avatar-row {
+    align-items: flex-start;
+  }
+}
+@media (hover: none) {
+  .profile-avatar-overlay {
+    opacity: 1;
+  }
 }
 </style>

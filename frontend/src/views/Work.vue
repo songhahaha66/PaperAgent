@@ -201,6 +201,7 @@
                     >输出 {{ formatTokens(modelUsage?.output_tokens) }}</span
                   >
                   <span
+                    class="model-usage-tps"
                     title="会话平均 TPS：全部已完成请求的输出 token / 累计请求耗时，包含等待与推理时间"
                     >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
                   >
@@ -839,6 +840,10 @@ onUnmounted(() => {
   color: var(--pa-muted);
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+.model-usage-tps {
+  position: relative;
+  top: 1px;
 }
 .work-composer:focus-within {
   border-color: var(--pa-line-strong);
