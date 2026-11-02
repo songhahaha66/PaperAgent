@@ -59,7 +59,7 @@ def create_user(db: Session, user: schemas.UserCreate):
 
 def authenticate_user(db: Session, email: str, password: str):
     user = get_user_by_email(db, email)
-    if not user:
+    if not user or not user.is_active:
         return False
     if not auth.verify_password(password, user.password_hash):
         return False

@@ -4,6 +4,9 @@ from jose import JWTError, jwt
 import bcrypt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy.orm import Session
+from database.database import get_db
+from models.models import User
 import os
 from dotenv import load_dotenv
 
@@ -51,10 +54,17 @@ def verify_token(token: str) -> Optional[int]:
     except JWTError:
         return None
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def is_active_user(db: Session, user_id: int) -> bool:
+    return db.query(User.id).filter(User.id == user_id, User.is_active.is_(True)).first() is not None
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+):
     token = credentials.credentials
     user_id = verify_token(token)
-    if user_id is None:
+    if user_id is None or not is_active_user(db, user_id):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

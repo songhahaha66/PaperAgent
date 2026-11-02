@@ -267,6 +267,7 @@ def test_application_wide_version_gate(tmp_path,monkeypatch,version,path,expecte
     import routers
     from database.database import get_db
     monkeypatch.setattr(routers,'verify_token',lambda _:7)
+    monkeypatch.setattr(routers,'is_active_user',lambda db,user_id:True)
     monkeypatch.setattr('services.data_services.crud.get_work',lambda *args:SimpleNamespace(created_by=7,architecture_version=version))
     app=FastAPI()
     @app.get('/api/works/{work_id}',dependencies=[Depends(routers.project_route_access)])

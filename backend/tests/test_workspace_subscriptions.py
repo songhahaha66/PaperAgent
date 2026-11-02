@@ -106,6 +106,21 @@ def test_send_timeout_evicts_only_the_stalled_socket():
     asyncio.run(scenario())
 
 
+def test_revoked_subscription_cannot_be_recreated_by_replay():
+    async def scenario():
+        manager = ConnectionManager()
+        socket = Socket()
+        async def denied():
+            return False
+        subscription = manager.register('work', socket, authorize=denied)
+        await manager.send('work', {'type': 'content', 'content': 'private'})
+        await subscription.writer
+        assert socket.closed == 1008 and not socket.events
+        await manager.replay('work', socket, SimpleNamespace(), 0, register_if_missing=False)
+        assert manager.get_connection_count() == 0
+    asyncio.run(scenario())
+
+
 def test_task_reservation_covers_pending_and_terminal_finalization(monkeypatch):
     import pytest
     async def scenario():
