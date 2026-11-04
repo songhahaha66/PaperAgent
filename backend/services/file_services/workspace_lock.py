@@ -62,3 +62,18 @@ async def execution_lock(root, *, cache_key=None, allowed_leases=()):
             yield
         finally:
             fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@contextmanager
+def try_execution_lock(root):
+    """A sweeper never waits behind an executor or applies creation lease checks."""
+    with _open(root, runtime=True) as stream:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)

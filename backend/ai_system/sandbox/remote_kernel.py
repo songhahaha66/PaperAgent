@@ -37,6 +37,21 @@ class RemoteKernel:
                                  and (row.get('runtime_owner')==self.owner or row.get('cache_key')==session.cache_key)
                                  and rid not in self.fs._manifest.get('inherited_runs', [])), None)
 
+    def _refresh_pending(self):
+        if self._started and self.runtime.path.exists():
+            current = json.loads(self.runtime.path.read_text())
+            if current.get('sandbox_id') != self.session.id or current.get('state') in {'destroyed', 'lost'}:
+                self._mark_reclaimed()
+            self.runtime.handle = current
+        self.fs._manifest = self.fs._load_manifest()
+        self.pending_run = next((rid for rid, row in reversed(self.fs._manifest.get('runs', {}).items())
+            if (row.get('delivery_state') == 'pending' or row.get('delivery_error') or
+                (row.get('execution_mode') == 'process' and row.get('submission_state') in
+                 {'submitting', 'submitted', 'unknown'}))
+            and row.get('submission_state') != 'not_submitted'
+            and (row.get('runtime_owner') == self.owner or row.get('cache_key') == self.session.cache_key)
+            and rid not in self.fs._manifest.get('inherited_runs', [])), None)
+
     def _save_storage(self):
         self.fs._manifest['storage'] = {'kind': 'api-execution-cache',
             'cache_key': self.session.cache_key, 'sandbox_root': self.session.root}
@@ -134,6 +149,7 @@ class RemoteKernel:
         from .lifetime import RETRIED_NOTE, RETRY_FAILED_PREFIX
         from .reclaim import runtime_hold
         async with self._lock, self.execution_scope.operation(self, self.timeout), runtime_hold(self):
+            self._refresh_pending()
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
                     run_id=self.pending_run, failure_kind='delivery')
@@ -371,7 +387,9 @@ class RemoteKernel:
                         self.pending_run = run_id
                 await event("finished", status=status, error=result.error, files=result.files,
                             delivery_error=result.delivery_error)
-                if noted and (execution_finished or result.failure_kind == 'sandbox_lost' or not process_job):
+                # This client is no longer following the job. Durable pending
+                # state still protects it and lets the sweeper recover it.
+                if noted:
                     from .reclaim import remember_finished
                     remember_finished(self, run_id)
             return result
@@ -382,67 +400,73 @@ class RemoteKernel:
         return text.encode('utf-8')[:self.settings.max_log_bytes].decode('utf-8', errors='ignore')
 
     async def retry_outputs(self):
-        from .evidence import seal_run
-        from .reclaim import remember_finished, runtime_hold
+        from .reclaim import runtime_hold
         async with self._lock, self.execution_scope.operation(self, self.timeout), runtime_hold(self):
-            if not self.pending_run:
-                return None
-            run_id = self.pending_run
-            info = self.fs.get_run_info(run_id)
-            if info.get('provider', 'opensandbox') != self.settings.provider:
-                raise RuntimeError('原执行属于另一沙箱平台；请恢复原平台配置取回文件，不会跨平台重跑')
+            self._refresh_pending()
+            return await self._retry_outputs_locked()
+
+    async def _retry_outputs_locked(self):
+        """Caller owns the project execution lock (also used by reclamation)."""
+        from .evidence import seal_run
+        from .reclaim import remember_finished
+        if not self.pending_run:
+            return None
+        run_id = self.pending_run
+        info = self.fs.get_run_info(run_id)
+        if info.get('provider', 'opensandbox') != self.settings.provider:
+            raise RuntimeError('原执行属于另一沙箱平台；请恢复原平台配置取回文件，不会跨平台重跑')
+        if info.get('cache_key')!=self.session.cache_key:
+            raise RuntimeError('原执行缓存不可用；请恢复原缓存配置取回文件，不会重跑计算')
+        # Persistent files survive containers. In-memory figures do not.
+        recovering = not self._started
+        if recovering:
+            await asyncio.wait_for(self._start(), self.settings.startup_timeout)
             if info.get('cache_key')!=self.session.cache_key:
-                raise RuntimeError('原执行缓存不可用；请恢复原缓存配置取回文件，不会重跑计算')
-            # Persistent files survive containers. In-memory figures do not.
-            recovering = not self._started
-            if recovering:
-                await asyncio.wait_for(self._start(), self.settings.startup_timeout)
-                if info.get('cache_key')!=self.session.cache_key:
-                    raise RuntimeError('原执行缓存不可用；不会重跑计算')
-            if info.get('execution_mode') == 'process' and not info.get('process_receipt'):
-                if getattr(self.session, 'execution_mode', None) != 'process':
-                    raise RuntimeError('原任务需要支持进程回执的沙箱，不能重放代码')
-                # Reconstruct logs from byte zero after a backend restart. This
-                # replaces the partial copy instead of appending duplicate data.
-                import tempfile
-                import os
-                with tempfile.TemporaryDirectory(dir=self.fs.run_dir(run_id), prefix='.recover-logs-') as folder:
-                    recovered_logs = Path(folder)
-                    for channel in ('stdout', 'stderr'):
-                        (recovered_logs / (channel + '.log')).touch()
-                    size = 0
-                    async def output(channel, text):
-                        nonlocal size
-                        raw = text.encode('utf-8')
-                        size += len(raw)
-                        if size > self.settings.max_log_bytes:
-                            raise ValueError('恢复日志超过限额，原本地日志保留')
-                        with (recovered_logs / (channel + '.log')).open('ab') as stream:
-                            stream.write(raw)
-                    outcome = await asyncio.wait_for(self.session.recover(run_id, output), self.timeout)
-                    for channel in ('stdout', 'stderr'):
-                        os.replace(recovered_logs / (channel + '.log'), self.fs.run_dir(run_id) / (channel + '.log'))
-                result = CellResult(ok=False, stdout='', error=None, run_id=run_id)
-                self._record_outcome(run_id, outcome, result)
-                info.update(error=result.error, failure_kind=result.failure_kind, finalize_pending=False)
-                self.fs.finish_run(run_id, 'timeout' if result.timed_out else
-                                   'cancelled' if outcome.stop_reason == 'cancelled' else 'success' if result.ok else 'error')
-            if info.get('finalize_pending'):
-                if info.get('execution_mode') != 'process' and (not self._started or info.get('context_id') != getattr(self.session, 'context_id', None)):
-                    raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
-                await self._finalize(run_id)
-            # A disk-backed completion may be frozen for the first time after
-            # reconnecting. Legacy kernels still require the original manifest.
-            info['files'] = await self._collect(run_id, recover=recovering and info.get('execution_mode') != 'process')
-            if info.get('status') in {'success', 'error'}:
-                seal_run(self.fs, run_id)
-            info['delivery_error'] = None
-            info['delivery_state'] = 'available'
-            if not info.get('error'):info['failure_stage']=None
-            self.fs._save_manifest()
-            remember_finished(self, run_id)
-            self.pending_run = None
-            return run_id
+                raise RuntimeError('原执行缓存不可用；不会重跑计算')
+        if info.get('execution_mode') == 'process' and not info.get('process_receipt'):
+            if getattr(self.session, 'execution_mode', None) != 'process':
+                raise RuntimeError('原任务需要支持进程回执的沙箱，不能重放代码')
+            # Reconstruct logs from byte zero after a backend restart. This
+            # replaces the partial copy instead of appending duplicate data.
+            import tempfile
+            import os
+            with tempfile.TemporaryDirectory(dir=self.fs.run_dir(run_id), prefix='.recover-logs-') as folder:
+                recovered_logs = Path(folder)
+                for channel in ('stdout', 'stderr'):
+                    (recovered_logs / (channel + '.log')).touch()
+                size = 0
+                async def output(channel, text):
+                    nonlocal size
+                    raw = text.encode('utf-8')
+                    size += len(raw)
+                    if size > self.settings.max_log_bytes:
+                        raise ValueError('恢复日志超过限额，原本地日志保留')
+                    with (recovered_logs / (channel + '.log')).open('ab') as stream:
+                        stream.write(raw)
+                outcome = await asyncio.wait_for(self.session.recover(run_id, output), self.timeout)
+                for channel in ('stdout', 'stderr'):
+                    os.replace(recovered_logs / (channel + '.log'), self.fs.run_dir(run_id) / (channel + '.log'))
+            result = CellResult(ok=False, stdout='', error=None, run_id=run_id)
+            self._record_outcome(run_id, outcome, result)
+            info.update(error=result.error, failure_kind=result.failure_kind, finalize_pending=False)
+            self.fs.finish_run(run_id, 'timeout' if result.timed_out else
+                               'cancelled' if outcome.stop_reason == 'cancelled' else 'success' if result.ok else 'error')
+        if info.get('finalize_pending'):
+            if info.get('execution_mode') != 'process' and (not self._started or info.get('context_id') != getattr(self.session, 'context_id', None)):
+                raise RuntimeError('原 Python 内存已失效，无法确认尚未保存的图；保留真实未完成状态，不重跑')
+            await self._finalize(run_id)
+        # A disk-backed completion may be frozen for the first time after
+        # reconnecting. Legacy kernels still require the original manifest.
+        info['files'] = await self._collect(run_id, recover=recovering and info.get('execution_mode') != 'process')
+        if info.get('status') in {'success', 'error'}:
+            seal_run(self.fs, run_id)
+        info['delivery_error'] = None
+        info['delivery_state'] = 'available'
+        if not info.get('error'):info['failure_stage']=None
+        self.fs._save_manifest()
+        remember_finished(self, run_id)
+        self.pending_run = None
+        return run_id
 
     async def close(self):
         async with self._lock, self.execution_scope.operation(self,self.timeout):
@@ -454,8 +478,10 @@ class RemoteKernel:
     async def disconnect(self):
         """Release client resources without discarding the remote interpreter."""
         from .reclaim import unregister_kernel
-        async with self._lock:
+        async with self._lock, self.execution_scope.operation(self, self.timeout):
             try:
+                if self.runtime.path.exists():
+                    self.runtime.handle = json.loads(self.runtime.path.read_text())
                 await self.runtime.disconnect()
             finally:
                 self._started=False

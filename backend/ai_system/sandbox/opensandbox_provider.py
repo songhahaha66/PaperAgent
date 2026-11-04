@@ -325,6 +325,17 @@ class OpenSandboxSession:
             raise ValueError('Process receipt belongs to another job')
         return value
 
+    async def job_status(self, run_id):
+        """Inspect the original job without submission, interruption or log cursors."""
+        value = await self._job_rpc('status', run_id)
+        done = value.get('done')
+        if done is not None:
+            if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
+                raise ValueError('Invalid process completion receipt')
+            return False
+        # A submitted supervisor without a receipt may still be running.
+        return True if value.get('submitted') else None
+
     async def submit(self, code, run_id, *, timeout=180):
         from opensandbox.models import WriteEntry
         if not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', run_id):

@@ -1,8 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from models import models
-from database.database import engine
-from sqlalchemy.orm import Session
 from routers import all_routers, project_route_access
 from fastapi import Depends
 import asyncio
@@ -48,12 +45,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"工作空间目录: {get_workspaces_path()}")
     logger.info(f"模板目录: {get_templates_path()}")
 
-    # 上次进程退出时还在生成的工作没有任务在跑了：标成已暂停，用户发"继续"会从断点接着跑
-    with Session(engine) as db:
-        stale = db.query(models.Project).filter(models.Project.status == "in_progress").update({"status": "paused"})
-        db.commit()
-    if stale:
-        logger.info(f"{stale} 个中断的工作已标记为暂停")
+    # Another backend may still own in_progress projects. Startup cannot infer
+    # coordinator death from this process's empty task registry.
 
     from ai_system.sandbox.reclaim import bind_loop, sweep_forever, sweep_once
     bind_loop(asyncio.get_running_loop())

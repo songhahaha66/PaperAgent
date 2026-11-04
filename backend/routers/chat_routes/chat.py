@@ -194,8 +194,6 @@ async def get_research_snapshot(
         raise HTTPException(status_code=403, detail="无权限访问")
     try:
         status = work.status
-        if status == "in_progress" and task_manager.get_task_status(work_id).get("status") not in {"pending", "running"}:
-            status = "paused"  # A persisted running flag cannot revive a lost coordinator.
         db.close()
         return await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, status)
     except ValueError as exc:
