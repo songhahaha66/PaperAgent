@@ -58,16 +58,21 @@ def test_missing_response_reconciles_committed_code_instead_of_replaying(tmp_pat
 
 @pytest.mark.usefixtures('offline_kernel')
 @pytest.mark.parametrize('mode',['isolated','fork'])
-def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,mode):
+@pytest.mark.parametrize('content_blocks',[False,True])
+def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,mode,content_blocks):
     from ai_system.modules.registry import invoke
     seen=[]
+    answer='计算结果12；结果文件outputs/result.txt；已检查输入。'
     def child(messages):
         seen.append(messages)
         rows=[m for m in messages if isinstance(m,ToolMessage)]
         if not rows:return tool('run_python',{'code':"from pathlib import Path\nassert Path('attachment/assigned.txt').read_text()=='6'\nassert not Path('attachment/unassigned.txt').exists()\nPath('outputs/result.txt').write_text('12')\nprint(12)"},'child-code')
         if len(rows)==1:return tool('read_file',{'path':'outputs/result.txt'},'read-result')
         assert '12' in rows[1].content and rows[1].status=='success'
-        return AIMessage(content='计算结果12；结果文件outputs/result.txt；已检查输入。')
+        return AIMessage(content=[
+            {'type':'reasoning','encrypted_content':'private-encrypted-marker','text':'private-reasoning-marker'},
+            {'type':'text','text':answer},
+        ] if content_blocks else answer)
     model=ResearchToolsModel(respond=child);ctx=context(tmp_path,model)
     folder=tmp_path/'attachment';folder.mkdir(exist_ok=True)
     (folder/'assigned.txt').write_text('6');(folder/'unassigned.txt').write_text('not assigned')
@@ -75,8 +80,10 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     async def run():
         result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt'])
         assert result['status']=='completed' and len(result['run_ids'])==1
+        assert result['answer']==answer
         activities=ctx.research.snapshot()['activity']
         parent=next(row for row in activities if row['capability']=='research.delegate')
+        assert parent['output']['answer']==answer
         child=[row for row in activities if row['capability']=='run_python']
         assert len(child)==1 and child[0]['id']!=parent['id']
         assert child[0]['parent_call_id']==parent['id'], 'independent execution keeps its own record'
@@ -86,6 +93,7 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
         assert ctx.fs.get_run_info(result['run_ids'][0])['status']=='success'
         following=await invoke(ctx,'research.delegate',task_id=result['task_id'],task='解释上次结果')
         assert following['run_ids']==result['run_ids']
+        assert following['answer']==answer
         assert any(getattr(m,'tool_call_id',None)=='child-code' for m in seen[-1])
         (folder/'assigned.txt').write_text('changed')
         with pytest.raises(ValueError,match='输入已变化'):

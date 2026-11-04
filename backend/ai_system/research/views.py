@@ -8,6 +8,7 @@ from ai_system.graph.registry import find_refs
 CLOSED = {'resolved','dismissed','superseded'}
 LABELS = {'experience.candidates':'更新经验索引','experience.search':'查找相关经验',
     'research.update_plan':'更新研究计划',
+    'research.list_skills':'查询可用研究技能','research.read_skill':'读取研究技能指导',
     'research.list_files':'查看工作区文件','research.search_files':'搜索工作区文件',
     'research.materialize_artifact':'准备计算输入','research.inspect_runtime':'查看沙箱状态','research.reset_runtime':'重置沙箱',
     'writing.preview':'预览论文 PDF','writing.use_asset':'引用论文素材','writing.propose_edits':'提出论文修改',
@@ -16,6 +17,7 @@ LABELS = {'experience.candidates':'更新经验索引','experience.search':'查�
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用失败',
     'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
+    'literature.search':'搜索研究文献','literature.verify':'核查文献引用','literature.import':'导入文献来源',
     'writing.edit':'编辑研究正文','research.delegate':'执行独立子任务',
     'writing.validate':'检查正文文件与引用',
     'writing.render':'渲染论文','writing.export':'导出论文','run_python':'运行实验代码',
