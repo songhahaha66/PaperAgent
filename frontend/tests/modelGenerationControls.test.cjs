@@ -57,7 +57,10 @@ async function mount(t, lookup = async () => deepseek, settings = {}) {
 }
 
 test('slider and context choices preserve hidden generation settings', async (t) => {
-  const { state, host, slider, context } = await mount(t, undefined, { max_output_tokens: 24000 })
+  const { state, host, slider, context } = await mount(t, undefined, {
+    max_output_tokens: 24000,
+    image_inputs: false,
+  })
   assert.equal(state.modelValue.context_window, 1000000)
   assert.match(text(host.root), /256K512K1M/)
   assert.doesNotMatch(text(host.root), /高级|单次生成上限/)
@@ -69,6 +72,7 @@ test('slider and context choices preserve hidden generation settings', async (t)
   await flush()
   assert.equal(state.modelValue.context_window, 512000)
   assert.equal(state.modelValue.max_output_tokens, 24000)
+  assert.equal(state.modelValue.image_inputs, false)
   slider().props.onInput({ target: { value: '0' } })
   await flush()
   assert.equal(state.thinkingEnabled, false)
@@ -85,6 +89,22 @@ test('slider and context choices preserve hidden generation settings', async (t)
     1000000,
     'late saved-config hydration receives the same default',
   )
+})
+
+test('image input defaults on and the checkbox keeps the rest of the settings', async (t) => {
+  const { state, host } = await mount(t, undefined, { max_output_tokens: 24000 })
+  const box = () => host.find((n) => n.kind === 'input' && n.props.type === 'checkbox')
+  assert.equal(box().props.checked, true)
+  assert.match(text(host.root), /图片输入/)
+  box().props.onChange({ target: { checked: false } })
+  await flush()
+  assert.equal(state.modelValue.image_inputs, false)
+  assert.equal(state.modelValue.max_output_tokens, 24000)
+  assert.equal(state.modelValue.context_window, 1000000)
+  box().props.onChange({ target: { checked: true } })
+  await flush()
+  assert.equal(state.modelValue.image_inputs, true)
+  assert.equal(box().props.checked, true)
 })
 
 test('known smaller model clamps context and rejects an oversized selection', async (t) => {

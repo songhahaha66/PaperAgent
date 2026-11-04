@@ -34,32 +34,33 @@ def deepseek(**settings):
         metadata={'generation_settings':settings},profile={})
 
 
-@pytest.mark.parametrize('name,strategy,tokens',[
-    ('gpt-4o','openai-tiles',765),('gpt-4o-mini','openai-mini-tiles',25501),
-    ('gpt-6-astra','openai-patches',1229),('gemini-3.8-flash','gemini',1120),
-    ('claude-opus-4-7','claude',1369)])
-def test_images_follow_model_rules(name,strategy,tokens):
-    policy=vision_policy(SimpleNamespace(model_name=name,profile={}))
-    assert policy.enabled and policy.strategy==strategy and policy.tokens(1024,1024)==tokens
+@pytest.mark.parametrize('name,base',[
+    ('gpt-6.1-terra','https://gateway.example/v1'),('gpt-6.1-terra','https://api.openai.com/v1'),
+    ('gpt-4o-mini',None),('claude-opus-4-7',None),('gemini-3.8-flash',None),
+    ('custom-local','http://127.0.0.1:11434/v1')])
+def test_image_input_defaults_on_for_any_model(name,base):
+    policy=vision_policy(SimpleNamespace(model_name=name,openai_api_base=base,profile={'image_inputs':False}))
+    assert policy.enabled and policy.strategy=='inline' and policy.tokens(1600,1600)==3000
 
 
-def test_deepseek_native_vision_and_explicit_gateway_configuration():
-    from ai_system.config.generation import GenerationSettings,ModelContextLimit
-    assert vision_policy(deepseek()).enabled
-    assert vision_policy(deepseek()).tokens(1600,1600)==1024
+def test_image_switch_off_and_deepseek_placement_are_independent():
+    from ai_system.config.generation import GenerationSettings
+    assert vision_policy(deepseek()).enabled and vision_policy(deepseek()).strategy=='deepseek'
+    assert vision_policy(deepseek()).tokens(1600,1600)==3000
     stale=deepseek();stale.profile={'image_inputs':False}
-    assert vision_policy(stale).enabled, 'official route metadata wins over an outdated SDK catalog'
+    assert vision_policy(stale).enabled, 'a catalog flag does not turn the switch off'
     assert not vision_policy(deepseek(image_inputs=False)).enabled
-    custom=SimpleNamespace(model_name='custom',profile={},metadata={'generation_settings':
-        GenerationSettings(image_inputs=True,image_tokens_per_image=4000).model_dump()})
-    assert vision_policy(custom).tokens(1024,1024)==4000
-    with pytest.raises(ModelContextLimit):vision_policy(SimpleNamespace(profile={'image_inputs':True})).tokens(100,100)
+    custom=SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1',profile={},
+        metadata={'generation_settings':GenerationSettings(image_inputs=True).model_dump()})
+    assert vision_policy(custom).enabled and vision_policy(custom).tokens(1024,1024)==3000
+    old=GenerationSettings.model_validate({'image_inputs':None,'image_tokens_per_image':4096})
+    assert old.image_inputs is True and 'image_tokens_per_image' not in old.model_dump()
 
 
 def test_old_images_are_durably_omitted_and_can_be_read_again(tmp_path):
     first=receipt(page(tmp_path,1),'one');second=receipt(page(tmp_path,2),'two')
     omitted={};media=ImageProjection(tmp_path,deepseek(),omitted)
-    view=media.view([first,second],max_tokens=1024)
+    view=media.view([first,second],max_tokens=3000)
     assert omitted and all(isinstance(m,ToolMessage) for m in view[:2])
     assert isinstance(view[-1],HumanMessage), 'DeepSeek receives documented user-image blocks after tool responses'
     assert '"visual_pages": []' in view[0].content
@@ -86,19 +87,91 @@ def test_inline_byte_limit_and_hash_verification(tmp_path):
     with pytest.raises(ValueError,match='校验失败'):media.hydrate(view)
 
 
-def test_native_image_meter_prices_visual_content_instead_of_base64_text(tmp_path):
+def test_image_budget_reserves_one_fixed_bound_per_page(tmp_path):
     from ai_system.core_handlers.model_runtime import reservation
+    from ai_system.graph.images import PAGE_IMAGE_TOKENS
+    pages=[receipt(page(tmp_path,number),str(number)) for number in (1,2,3)]
+    terra=SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1')
+    media=ImageProjection(tmp_path,terra,{})
+    view=media.view(pages,max_tokens=PAGE_IMAGE_TOKENS*2)
+    assert media.attached==2 and media.absent_reason is None
+    assert '"visual_pages": []' in str(view[0].content)
+    assert '"visual_pages": [2]' in str(view[1].content) and '"visual_pages": [3]' in str(view[2].content)
+    dropped=ImageProjection(tmp_path,terra,{})
+    dropped.view(pages,max_tokens=PAGE_IMAGE_TOKENS-1)
+    assert dropped.attached==0 and dropped.absent_reason=='budget'
     message=receipt(page(tmp_path),'one')
-    media=ImageProjection(tmp_path,deepseek(),{})
-    block=media.hydrate(media.view([message],max_tokens=10000))[-1].content[-1]
-    assert token_estimate(block,image_counter=media.native_tokens)==1024
-    mini=ImageProjection(tmp_path,SimpleNamespace(model_name='gpt-4o-mini',profile={}),{})
-    assert token_estimate(block,image_counter=mini.native_tokens)==25501
+    block=media.hydrate(media.view([message],max_tokens=10000))[0].content[-1]
+    assert token_estimate(block,image_counter=media.native_tokens)==PAGE_IMAGE_TOKENS
     wire=HumanMessage(content=[block])
     native_reservation=reservation(deepseek(),([wire],),{})['input_tokens']
-    mini_reservation=reservation(SimpleNamespace(model_name='gpt-4o-mini',profile={}),([wire],),{})['input_tokens']
-    assert mini_reservation-native_reservation==25501-1024
-    assert native_reservation<2000
+    terra_reservation=reservation(terra,([wire],),{})['input_tokens']
+    assert terra_reservation==native_reservation
+    assert PAGE_IMAGE_TOKENS<=native_reservation<PAGE_IMAGE_TOKENS+2000
+
+
+def _preview_turn(tmp_path):
+    messages=[HumanMessage(content='Check page'),AIMessage(content='',tool_calls=[
+        {'name':'writing_preview','args':{},'id':'one'}]),receipt(page(tmp_path),'one')]
+    class Request:
+        tools=[]
+        def __init__(self,rows):self.messages=rows
+        def override(self,**kwargs):return Request(kwargs['messages'])
+    return messages,Request
+
+
+def test_unsupported_image_error_strips_images_once_and_disables_the_switch(tmp_path,monkeypatch):
+    from langchain.agents.middleware import ModelResponse
+    from ai_system.graph.images import IMAGE_UNSUPPORTED_NOTE
+    from ai_system.research.runtime import ModelServiceError
+    saved=[]
+    monkeypatch.setattr('ai_system.config.generation.disable_saved_image_inputs',lambda config_id:saved.append(config_id) or True)
+    class Rejected(Exception):
+        status_code=400
+        body={'error':{'message':'Invalid content type. image_url is only supported by certain models.','type':'invalid_request_error'}}
+        def __str__(self):return self.body['error']['message']
+    calls=[]
+    async def handler(request):
+        calls.append(request.messages)
+        if len(calls)==1:
+            assert any(isinstance(m.content,list) and any(isinstance(p,dict) and p.get('type')=='image_url' for p in m.content) for m in request.messages)
+            raise ModelServiceError('模型请求失败，已保留状态；请检查连接或请求内容。') from Rejected()
+        blocks=[part.get('type') for m in request.messages if isinstance(m.content,list) for part in m.content if isinstance(part,dict)]
+        assert 'image_url' not in blocks and 'image_ref' not in blocks
+        assert IMAGE_UNSUPPORTED_NOTE in str([m.content for m in request.messages])
+        return ModelResponse(result=[AIMessage(content='text only')])
+    model=SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1',
+        metadata={'generation_settings':{},'model_config_id':7},profile={'max_input_tokens':100000})
+    ctx=GraphContext.create(str(tmp_path),planner_llm=model)
+    ctx.research=ResearchStore(tmp_path,'images');ctx.research.initialize('check page')
+    middleware=ContextMiddleware(ctx,model,'images',pinned={})
+    messages,Request=_preview_turn(tmp_path)
+    result=asyncio.run(middleware.awrap_model_call(Request(messages),handler))
+    assert len(calls)==2 and saved==[7]
+    assert model.metadata['generation_settings']['image_inputs'] is False
+    assert vision_policy(model).disabled_reason==IMAGE_UNSUPPORTED_NOTE
+    assert result.result[0].content=='text only'
+
+
+@pytest.mark.parametrize('error',[
+    SimpleNamespace(status_code=400,body={'error':{'message':'tool arguments were not valid JSON','code':'invalid_json'}}),
+    SimpleNamespace(status_code=500,body='<html>image_url exploded</html>'),
+    TimeoutError('timed out'),
+])
+def test_unrelated_model_errors_do_not_drop_images_or_retry(tmp_path,error):
+    messages,Request=_preview_turn(tmp_path)
+    calls=[]
+    async def handler(request):
+        calls.append(request.messages)
+        raise error if isinstance(error,BaseException) else type('Rejected',(Exception,),{
+            'status_code':error.status_code,'body':error.body,'__str__':lambda self:str(self.body)})()
+    model=SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1',
+        metadata={'generation_settings':{},'model_config_id':9},profile={'max_input_tokens':100000})
+    ctx=GraphContext.create(str(tmp_path),planner_llm=model)
+    ctx.research=ResearchStore(tmp_path,'images');ctx.research.initialize('check page')
+    middleware=ContextMiddleware(ctx,model,'images',pinned={})
+    with pytest.raises(Exception):asyncio.run(middleware.awrap_model_call(Request(messages),handler))
+    assert len(calls)==1 and model.metadata['generation_settings'].get('image_inputs') is not False
 
 
 def test_actual_input_usage_calibrates_same_prefix_but_not_a_different_route(tmp_path,monkeypatch):
@@ -127,12 +200,14 @@ def test_actual_input_usage_calibrates_same_prefix_but_not_a_different_route(tmp
         await middleware.awrap_model_call(Request(messages),handler)
         messages += [reply,HumanMessage(content='Now explain it')]
         await middleware.awrap_model_call(Request(messages),handler)
-        model.metadata={'generation_settings':{'image_tokens_per_image':2048}}
+        model.metadata={'generation_settings':{'image_inputs':False}}
         await middleware.awrap_model_call(Request(messages),handler)
     asyncio.run(run())
+    assert stats[0]['images_attached']==1 and stats[0]['images_absent_reason'] is None
     assert stats[0]['total_estimated_tokens']<10000
     assert stats[1]['total_estimated_tokens']>10000
-    assert stats[2]['total_estimated_tokens']<10000, 'model/meter changes invalidate the usage anchor'
+    assert stats[2]['images_attached']==0 and stats[2]['images_absent_reason']=='image_inputs_off'
+    assert stats[2]['total_estimated_tokens']<10000, 'turning images off invalidates the usage anchor'
 
 
 def test_pdf_projection_reaches_real_sdk_and_budget_via_mock_http(tmp_path):
@@ -156,7 +231,7 @@ def test_pdf_projection_reaches_real_sdk_and_budget_via_mock_http(tmp_path):
         async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
             model=MeteredChatOpenAI(model='deepseek-flash',api_key='offline',
                 base_url='https://api.deepseek.com/v1',http_async_client=client,max_tokens=1000,
-                profile={'max_input_tokens':100000,'image_inputs':False})
+                profile={'max_input_tokens':100000})
             ctx=GraphContext.create(str(tmp_path),planner_llm=model)
             ctx.research=ResearchStore(tmp_path,'sdk');ctx.research.initialize('check page')
             middleware=ContextMiddleware(ctx,model,'sdk',pinned={})
@@ -170,7 +245,7 @@ def test_pdf_projection_reaches_real_sdk_and_budget_via_mock_http(tmp_path):
     asyncio.run(run())
     rows=ResearchRuntime(tmp_path).requests()
     assert len(sent)==len(rows)==1 and rows[0]['state']=='completed'
-    assert 1024<=rows[0]['reservation']['input_tokens']<4000
+    assert 3000<=rows[0]['reservation']['input_tokens']<5000
     assert 'base64' not in json.dumps(rows)
 
 

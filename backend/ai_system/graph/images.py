@@ -1,13 +1,14 @@
-"""Durable page references, route-aware metering and request-only image bytes.
+"""Durable page references and request-only image bytes.
 
 Refs remain in checkpoints. Only the disposable model-input copy contains
-base64, following the attachment/projection boundary used by DeepSeek Harness.
+base64. Whether images are sent is the model config's image_inputs switch.
+DeepSeek's official API still receives images in a following user message;
+that placement is a transport detail, not a capability gate.
 """
 import base64
 from dataclasses import dataclass
 import hashlib
 import json
-import math
 import re
 from urllib.parse import urlparse
 
@@ -16,71 +17,89 @@ from services.file_services.workspace_layout import workspace_path
 from ..config.generation import ModelContextLimit
 
 PAGE_PATH=re.compile(r'\.system/paper-project/previews/[a-f0-9]{64}/[1-9][0-9]*\.png')
+# One reserve for a preview page whose long side is at most 1600px.
+PAGE_IMAGE_TOKENS=3000
+IMAGE_UNSUPPORTED_NOTE='本次未附图：模型不支持图片输入，已自动关闭'
+_IMAGE_UNSUPPORTED=re.compile(
+    r'image[_ ]url|'
+    r"(?:does not|do not|doesn't|don't|cannot|can't|\bnot) support(?:ing)? (?:an? )?images?|"
+    r'image inputs? (?:are |is )?(?:not supported|unsupported)|'
+    r'(?:does not|do not|not) support (?:vision|multimodal)|'
+    r'unsupported (?:image|vision)|'
+    r'unknown variant [`\'"]?image|'
+    r'expected [`\'"]?text[`\'"]?.{0,80}image',
+    re.I)
 
 
 @dataclass(frozen=True)
 class VisionPolicy:
     enabled: bool
     strategy: str
-    upper_bound: int | None = None
+    upper_bound: int = PAGE_IMAGE_TOKENS
     # Deployment bound, also below DeepSeek's 48 MiB inline request limit.
     max_inline_bytes: int = 32*1024*1024
+    disabled_reason: str | None = None
 
     def tokens(self,width,height):
-        if self.upper_bound is not None:return self.upper_bound
-        if self.strategy=='deepseek':return 1024  # published per-image upper bound
-        if self.strategy in {'openai-tiles','openai-mini-tiles'}:
-            scale=min(1,2048/max(width,height),768/min(width,height))
-            tiles=math.ceil(width*scale/512)*math.ceil(height*scale/512)
-            return (2833+5667*tiles) if self.strategy=='openai-mini-tiles' else (85+170*tiles)
-        if self.strategy.startswith('openai-patches'):
-            cap=6144 if self.strategy.endswith('6144') else 2500
-            multiplier=1.62 if self.strategy=='openai-patches-mini-6144' else 1.2
-            count=math.ceil(width/32)*math.ceil(height/32)
-            if count>cap:
-                scale=math.sqrt(cap*32*32/(width*height))
-                w,h=width*scale,height*scale
-                scale*=min(math.floor(w/32)/(w/32),math.floor(h/32)/(h/32))
-                count=math.ceil(math.floor(width*scale)/32)*math.ceil(math.floor(height*scale)/32)
-            return math.ceil(count*multiplier)
-        if self.strategy=='claude':return math.ceil(width/28)*math.ceil(height/28)
-        if self.strategy=='gemini':return 1120  # Gemini 3/4 high resolution
-        raise ModelContextLimit('该模型尚未配置图片计量；请设置 image_tokens_per_image 上界后查看图片。')
+        return self.upper_bound
 
 
 def vision_policy(llm):
-    profile=getattr(llm,'profile',None) or {}
-    settings=(getattr(llm,'metadata',None) or {}).get('generation_settings',{})
+    """The config switch is the only gate. Missing means on."""
+    metadata=getattr(llm,'metadata',None) or {}
+    settings=metadata.get('generation_settings') or {}
     declared=settings.get('image_inputs')
-    if declared is None:declared=profile.get('image_inputs')
-    bound=settings.get('image_tokens_per_image') or profile.get('image_tokens_per_image')
-    if bound is not None and (not isinstance(bound,int) or isinstance(bound,bool) or bound<=0):
-        raise ValueError('image_tokens_per_image 必须为正整数')
-    name=str(getattr(llm,'model_name',None) or getattr(llm,'model',None) or '').removeprefix('models/').lower()
+    if declared is None:enabled=True
+    elif isinstance(declared,bool):enabled=declared
+    else:raise ValueError('image_inputs 必须是布尔值')
     base=getattr(llm,'openai_api_base',None) or getattr(llm,'base_url',None)
     host=urlparse(str(base)).hostname if base else None
-    strategy='unknown';known=False
-    if host=='api.deepseek.com':
-        known=name in {'deepseek-flash','deepseek-v4-flash','deepseek-v4-flash-vision-exp'}
-        strategy='deepseek'
-        # The SDK's OpenAI catalog may predate DeepSeek's native vision. Only
-        # explicit connection settings override the official route declaration.
-        declared=settings.get('image_inputs')
-    elif name.startswith(('gpt-','chatgpt-')) and host in {None,'api.openai.com'}:
-        if name.startswith('gpt-4o-mini'):strategy='openai-mini-tiles'
-        elif name.startswith(('gpt-4o','gpt-4.1')) and not name.startswith(('gpt-4.1-mini','gpt-4.1-nano')):strategy='openai-tiles'
-        elif name.startswith('gpt-4.1-mini'):strategy='openai-patches-mini-6144'
-        elif name.startswith('gpt-5.2'):strategy='openai-patches-6144'
-        elif any(name==family or re.fullmatch(re.escape(family)+r'-\d{4}-\d{2}-\d{2}',name)
-                 for family in ('gpt-6-astra','gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4','gpt-5.4-mini','gpt-5.4-nano')):
-            strategy='openai-patches'
-        known=strategy!='unknown'
-    elif name.startswith('claude-'):
-        strategy='claude';known=True
-    elif name.startswith(('gemini-3','gemini-4')):
-        strategy='gemini';known=True
-    enabled=bool(known if declared is None else declared)
-    return VisionPolicy(enabled,strategy,bound)
+    strategy='deepseek' if host=='api.deepseek.com' else 'inline'
+    reason=metadata.get('image_inputs_disabled_reason') if not enabled else None
+    if not isinstance(reason,str):reason=None
+    return VisionPolicy(enabled,strategy,disabled_reason=reason)
+
+
+def _status(exc):
+    status=getattr(exc,'status_code',None) or getattr(getattr(exc,'response',None),'status_code',None)
+    return status if isinstance(status,int) else None
+
+
+def _error_text(exc):
+    parts=[str(exc)[:2000]]
+    body=getattr(exc,'body',None)
+    if isinstance(body,dict):parts.append(json.dumps(body,ensure_ascii=False)[:2000])
+    elif isinstance(body,str):parts.append(body[:2000])
+    message=getattr(exc,'message',None)
+    if isinstance(message,str):parts.append(message[:2000])
+    return '\n'.join(parts)
+
+
+def images_unsupported(exc):
+    """True only for a client error that says this model cannot take images."""
+    seen=set();current=exc
+    while current is not None and id(current) not in seen and len(seen)<8:
+        seen.add(id(current))
+        if _status(current) in {400,422} and _IMAGE_UNSUPPORTED.search(_error_text(current)):
+            return True
+        current=current.__cause__ or current.__context__
+    return False
+
+
+def disable_image_inputs(llm):
+    """Turn the switch off in memory and on the saved model config when it has an id."""
+    metadata=getattr(llm,'metadata',None)
+    if not isinstance(metadata,dict):
+        metadata={}
+        try:setattr(llm,'metadata',metadata)
+        except (AttributeError,ValueError,TypeError):object.__setattr__(llm,'metadata',metadata)
+    settings=dict(metadata.get('generation_settings') or {})
+    settings.pop('image_tokens_per_image',None)
+    settings['image_inputs']=False
+    metadata['generation_settings']=settings
+    metadata['image_inputs_disabled_reason']=IMAGE_UNSUPPORTED_NOTE
+    from ..config.generation import disable_saved_image_inputs
+    disable_saved_image_inputs(metadata.get('model_config_id'))
 
 
 def page_ref(root,row):
@@ -108,6 +127,8 @@ def image_value(message):
 class ImageProjection:
     def __init__(self,root,llm,omitted):
         self.root,self.policy,self.omitted=root,vision_policy(llm),omitted
+        self.attached=0
+        self.absent_reason='no_images'
         self._native_costs={}
 
     def native_tokens(self,block):
@@ -171,8 +192,9 @@ class ImageProjection:
             public['image_refs']=value['_images']
             shown={row['page'] for _,row,_ in rows}
             public['visual_pages']=sorted(shown)
-            public['visual_review']=('本次请求附实际页面图像；未附的页面仅保留文本及固定版本重读入口。' if rows else
-                '当前未附图片，仅有PDF文本；不能声称已做视觉检查。可按source_version、pdf_sha256和页码重新writing_preview。')
+            if rows:public['visual_review']='本次请求附实际页面图像；未附的页面仅保留文本及固定版本重读入口。'
+            elif self.policy.disabled_reason:public['visual_review']=self.policy.disabled_reason
+            else:public['visual_review']='当前未附图片，仅有PDF文本；不能声称已做视觉检查。可按source_version、pdf_sha256和页码重新writing_preview。'
             blocks=[{'type':'text','text':json.dumps(public,ensure_ascii=False)}]
             blocks.extend({'type':'image_ref','image_ref':row,'tokens':cost} for _,row,cost in rows)
             if rows and self.policy.strategy=='deepseek':
@@ -185,6 +207,11 @@ class ImageProjection:
                 pending.extend(blocks[1:])
             else:output.append(message.model_copy(update={'content':blocks if rows else blocks[0]['text']}))
         flush_images()
+        self.attached=sum(len(rows) for rows in selected.values())
+        if self.attached:self.absent_reason=None
+        elif not candidates:self.absent_reason='no_images'
+        elif not self.policy.enabled:self.absent_reason=self.policy.disabled_reason or 'image_inputs_off'
+        else:self.absent_reason='budget'
         return output
 
     def original_tokens(self,messages,estimate):

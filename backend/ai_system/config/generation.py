@@ -18,9 +18,18 @@ class GenerationSettings(BaseModel):
     context_window:int|None=Field(default=None,ge=1024,le=10000000)
     reasoning_effort:Literal['minimal','low','medium','high','xhigh','max']|None=None
     prices:TokenPrices|None=None
-    image_inputs:bool|None=None
-    image_tokens_per_image:int|None=Field(default=None,ge=1,le=1000000,
-        description='自定义视觉模型的单图token保守上界；已适配模型使用其原生规则。')
+    image_inputs:bool=True
+
+    @model_validator(mode='before')
+    @classmethod
+    def drop_retired_image_meter(cls, data):
+        """image_tokens_per_image is retired; a missing switch stays on."""
+        if isinstance(data, dict):
+            data=dict(data)
+            data.pop('image_tokens_per_image', None)
+            if data.get('image_inputs') is None:
+                data['image_inputs']=True
+        return data
 
     @model_validator(mode='after')
     def room_for_input(self):
@@ -80,6 +89,40 @@ class ModelContextLimit(ModelGenerationLimit):pass
 
 class ModelContextOverflow(ModelContextLimit):
     """Request rejected before response content; safe to rebuild context once."""
+
+def disable_saved_image_inputs(config_id):
+    """Persist image_inputs=false. Env-only connections have no saved row."""
+    import logging
+    logger=logging.getLogger(__name__)
+    if not config_id:
+        logger.info('图片输入已在当前进程关闭；该连接没有已保存的模型配置')
+        return False
+    try:
+        from database.database import SessionLocal
+        from models.models import ModelConfig
+        db=SessionLocal()
+    except Exception:
+        logger.warning('无法打开模型配置库，图片输入仅在当前进程关闭', exc_info=True)
+        return False
+    try:
+        row=db.get(ModelConfig, config_id)
+        if row is None:
+            logger.warning('未找到模型配置 %s，图片输入仅在当前进程关闭', config_id)
+            return False
+        settings=dict(row.generation_settings or {})
+        settings.pop('image_tokens_per_image', None)
+        settings['image_inputs']=False
+        row.generation_settings=settings
+        db.commit()
+        logger.info('已关闭模型配置 %s 的图片输入', config_id)
+        return True
+    except Exception:
+        db.rollback()
+        logger.warning('关闭模型配置图片输入失败', exc_info=True)
+        return False
+    finally:
+        db.close()
+
 
 def completion_info(reply):
     messages=getattr(reply,'result',None) or getattr(reply,'generations',None) or [reply]

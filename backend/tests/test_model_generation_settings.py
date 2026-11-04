@@ -40,17 +40,68 @@ def test_unknown_gateway_capacity_is_not_inferred_from_the_endpoint_name():
 
 
 def test_vision_settings_reach_the_actual_model_projection_without_network_calls():
+    from ai_system.config.generation import GenerationSettings
     from ai_system.graph.images import vision_policy
     config = SimpleNamespace(model_id='deepseek-flash', base_url='https://api.deepseek.com/v1',
                              api_key='offline', generation_settings={})
     native = create_llm_from_model_config(config)
-    assert vision_policy(native).enabled and vision_policy(native).tokens(1600,1600) == 1024
-    config.model_id='custom-vision';config.base_url='https://gateway.invalid/v1'
-    config.generation_settings={'image_inputs':True,'image_tokens_per_image':4096}
-    custom = create_llm_from_model_config(config)
-    assert vision_policy(custom).enabled and vision_policy(custom).tokens(1600,1600) == 4096
+    assert vision_policy(native).enabled and vision_policy(native).strategy=='deepseek'
+    assert vision_policy(native).tokens(1600,1600) == 3000
+    config.model_id='gpt-6.1-terra';config.base_url='https://gateway.invalid/v1'
+    config.generation_settings={'image_tokens_per_image':4096}
+    terra = create_llm_from_model_config(config)
+    assert vision_policy(terra).enabled and vision_policy(terra).strategy=='inline'
+    assert vision_policy(terra).tokens(1600,1600) == 3000
+    assert terra.metadata['generation_settings']['image_inputs'] is True
+    assert 'image_tokens_per_image' not in terra.metadata['generation_settings']
+    loaded=GenerationSettings.model_validate({'image_inputs':None,'image_tokens_per_image':2048,'context_window':128000})
+    assert loaded.image_inputs is True and loaded.context_window==128000
     config.generation_settings={'image_inputs':False}
     assert not vision_policy(create_llm_from_model_config(config)).enabled
+
+
+def test_env_image_inputs_default_on_and_can_be_disabled(monkeypatch):
+    from ai_system.config.api_settings import EnvModelConfig, load_env_api_settings
+    monkeypatch.setenv('PAPERAGENT_API_KEY', 'offline')
+    monkeypatch.setenv('PAPERAGENT_API_BASE', 'http://gateway.example:30080')
+    monkeypatch.delenv('PAPERAGENT_API_IMAGE_INPUTS', raising=False)
+    settings = load_env_api_settings()
+    assert settings.image_inputs is True
+    model = create_llm_from_model_config(EnvModelConfig(settings))
+    from ai_system.graph.images import vision_policy
+    assert vision_policy(model).enabled and vision_policy(model).strategy == 'inline'
+    monkeypatch.setenv('PAPERAGENT_API_IMAGE_INPUTS', 'off')
+    assert load_env_api_settings().image_inputs is False
+    monkeypatch.setenv('PAPERAGENT_API_IMAGE_INPUTS', 'maybe')
+    with pytest.raises(ValueError, match='PAPERAGENT_API_IMAGE_INPUTS'):
+        load_env_api_settings()
+
+
+def test_auto_disable_persists_on_the_saved_model_config(monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from models.models import Base, ModelConfig, User
+    from ai_system.config.generation import disable_saved_image_inputs
+    engine = create_engine('sqlite://', connect_args={'check_same_thread': False})
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    with Session() as db:
+        db.add(User(username='owner', email='owner@example.com', password_hash='x'))
+        db.commit()
+        user_id = db.query(User).one().id
+        db.add(ModelConfig(type='brain', provider='openai', model_id='gpt-6.1-terra',
+                            base_url='https://gateway.example/v1', api_key='offline', created_by=user_id,
+                            generation_settings={'context_window': 128000, 'image_inputs': True, 'image_tokens_per_image': 4096}))
+        db.commit()
+        config_id = db.query(ModelConfig).one().id
+    monkeypatch.setenv('DATABASE_URL', 'sqlite://')
+    monkeypatch.setattr('database.database.SessionLocal', Session)
+    assert disable_saved_image_inputs(config_id) is True
+    with Session() as db:
+        saved = db.get(ModelConfig, config_id).generation_settings
+    assert saved['image_inputs'] is False and saved['context_window'] == 128000
+    assert 'image_tokens_per_image' not in saved
+    assert disable_saved_image_inputs(None) is False
 
 
 def test_capacity_lookup_and_save_validation_through_real_routes():

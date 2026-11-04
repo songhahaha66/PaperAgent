@@ -202,6 +202,7 @@ class OpenAIProvider(BaseLLMProvider):
             stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=extra_body,
+            stream_usage=True,
             http_client=httpx.Client(event_hooks={'request':[request_hook],'response':[response_hook]},follow_redirects=False),
             http_async_client=httpx.AsyncClient(event_hooks={'request':[async_request_hook],'response':[async_response_hook]},follow_redirects=False),
         )
@@ -292,6 +293,7 @@ class LocalProvider(BaseLLMProvider):
             stream_chunk_timeout=kwargs.get('timeout', self.config.get('timeout_seconds') or 600),
             # 供应商私有参数，如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
             extra_body=kwargs.get('extra_body'),
+            stream_usage=True,
         )
 
     def validate_config(self) -> bool:
@@ -371,7 +373,8 @@ def create_llm_from_model_config(model_config, **kwargs) -> BaseLanguageModel:
         if config['provider'] not in {'openai','local'}:raise ValueError('该连接尚未适配reasoning_effort，请使用服务商原生思考配置')
         kwargs.setdefault('reasoning_effort',settings.reasoning_effort)
     model=LLMProviderFactory.create_llm_instance(config, **kwargs)
-    update={'metadata':{**(getattr(model,'metadata',None) or {}),'generation_settings':settings.model_dump()}}
+    update={'metadata':{**(getattr(model,'metadata',None) or {}),'generation_settings':settings.model_dump(),
+                        'model_config_id':getattr(model_config,'id',None)}}
     window=context_window(settings,config['model_id'],config['base_url'],getattr(model,'profile',None))
     if window is not None:
         update['profile']={**(getattr(model,'profile',None) or {}),'max_context_tokens':window,

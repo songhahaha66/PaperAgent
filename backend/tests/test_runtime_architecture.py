@@ -142,10 +142,10 @@ def test_actual_pdf_pages_and_model_images_are_version_bound(tmp_path):
     from langchain_core.messages import ToolMessage
     receipt=ToolMessage(content=tool_content(ctx,result,None),tool_call_id='preview')
     assert 'base64' not in receipt.content
-    media=ImageProjection(tmp_path,SimpleNamespace(profile={'image_inputs':True,'image_tokens_per_image':4096}),{})
+    media=ImageProjection(tmp_path,SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1'),{})
     image=media.hydrate(media.view([receipt],max_tokens=10000))[0].content
     assert image[1]['image_url']['url'].startswith('data:image/png;base64,')
-    text=ImageProjection(tmp_path,SimpleNamespace(profile={}),{}).view([receipt],max_tokens=10000)[0]
+    text=ImageProjection(tmp_path,SimpleNamespace(metadata={'generation_settings':{'image_inputs':False}}),{}).view([receipt],max_tokens=10000)[0]
     assert '不能声称已做视觉检查' in text.content
     with pytest.raises(ValueError,match='超出范围'):render_pages(tmp_path,version,pdf_hash,[3])
     with pytest.raises(FileNotFoundError):render_pages(tmp_path,'b'*64,pdf_hash,[1])
@@ -183,8 +183,7 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
             {'type':'reasoning','encrypted_content':'private-encrypted-marker','text':'private-reasoning-marker'},
             {'type':'text','text':answer},
         ] if content_blocks else answer)
-    model=ResearchToolsModel(respond=child,profile={'image_inputs':True,'max_input_tokens':128000},
-        metadata={'generation_settings':{'image_tokens_per_image':4096}})
+    model=ResearchToolsModel(respond=child,profile={'max_input_tokens':128000},metadata={})
     ctx=context(tmp_path);ctx.coder_llm=model
     (tmp_path/'paper.tex').write_text(r'\begin{document}Known manuscript\end{document}')
     version=project.snapshot(tmp_path)['version'];pdf=tmp_path/'paper.pdf'

@@ -16,6 +16,37 @@ def client(handler,streaming=False):
         max_tokens=16000,streaming=streaming,http_async_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
 
 
+def test_streaming_gateway_requests_return_usage(tmp_path, monkeypatch):
+    from ai_system.core_handlers.llm_providers import OpenAIProvider, LocalProvider
+    seen=[]
+    def handle(request):
+        seen.append(json.loads(request.content))
+        chunk={'id':'t','object':'chat.completion.chunk','created':0,'model':'gpt-6.1-terra',
+               'choices':[{'index':0,'delta':{'role':'assistant','content':'ok'},'finish_reason':'stop'}]}
+        usage={'id':'t','object':'chat.completion.chunk','created':0,'model':'gpt-6.1-terra','choices':[],
+               'usage':{'prompt_tokens':11,'completion_tokens':2,'total_tokens':13}}
+        body='data: '+json.dumps(chunk)+'\n\ndata: '+json.dumps(usage)+'\n\ndata: [DONE]\n\n'
+        return httpx.Response(200, headers={'content-type':'text/event-stream'}, text=body)
+    local=LocalProvider({'model_id':'local','api_key':'offline','base_url':'http://127.0.0.1:11434/v1'}).create_llm_instance()
+    transport=httpx.MockTransport(handle)
+    class RecordingAsyncClient(httpx.AsyncClient):
+        def __init__(self,*args,**kwargs):
+            kwargs['transport']=transport
+            super().__init__(*args,**kwargs)
+    monkeypatch.setattr(httpx,'AsyncClient',RecordingAsyncClient)
+    llm=OpenAIProvider({'model_id':'gpt-6.1-terra','api_key':'offline','base_url':'https://gateway.example/v1'}).create_llm_instance(streaming=True, max_tokens=64)
+    assert llm.stream_usage is True and local.stream_usage is True
+    async def run():
+        with budget_scope(tmp_path):
+            message=await llm.ainvoke([HumanMessage('hi')])
+            assert message.content=='ok'
+    asyncio.run(run())
+    assert seen[0]['stream_options']=={'include_usage':True} and seen[0]['model']=='gpt-6.1-terra'
+    rows=ResearchRuntime(tmp_path).requests()
+    assert len(rows)==1 and rows[0]['usage_returned'] is True and rows[0]['input_tokens']==11
+    assert not rows[0].get('usage_unknown')
+
+
 def test_explicit_connection_policy_reaches_gateway_without_thinking_heuristic():
     llm=create_llm_from_model_config(SimpleNamespace(model_id='gateway-alias',base_url='https://offline.invalid/v1',api_key='offline',
         generation_settings={'max_output_tokens':24000,'context_window':64000,'reasoning_effort':'low'}))

@@ -58,6 +58,18 @@
       }}</small>
     </div>
   </div>
+  <label class="connection-field image-input-field">
+    <span>{{ isZh ? '图片输入' : 'Image input' }}</span>
+    <span class="image-input-control">
+      <input
+        type="checkbox"
+        :checked="imageInputs"
+        :disabled="disabled"
+        :aria-label="isZh ? '图片输入' : 'Image input'"
+        @change="setImageInputs"
+      />
+    </span>
+  </label>
 </template>
 <script setup lang="ts">
 import { computed, ref, useId, watch } from 'vue'
@@ -102,6 +114,7 @@ const effortIndex = computed(() =>
     ? 0
     : Math.max(0, efforts.value.indexOf(props.modelValue?.reasoning_effort || '')),
 )
+const imageInputs = computed(() => props.modelValue?.image_inputs !== false)
 function effortLabel(value: string) {
   const labels: Record<string, string[]> = {
     off: ['关', 'Off'],
@@ -121,6 +134,12 @@ function setEffort(event: Event) {
   emit('update:modelValue', {
     ...props.modelValue,
     reasoning_effort: value === 'off' ? null : value,
+  })
+}
+function setImageInputs(event: Event) {
+  emit('update:modelValue', {
+    ...props.modelValue,
+    image_inputs: (event.target as HTMLInputElement).checked,
   })
 }
 function setContext(event: Event) {
@@ -295,6 +314,22 @@ input:disabled {
 .effort-labels .selected {
   color: var(--pa-accent);
   font-weight: 500;
+}
+.image-input-field {
+  cursor: pointer;
+}
+.image-input-field > span:first-child {
+  padding-top: 0;
+}
+.image-input-control {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+.image-input-control input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 small {
   display: block;
