@@ -132,3 +132,22 @@ beyond the server's lifetime limits. Unknown/running jobs are never forcibly
 killed by the idle sweeper. Healthy execution renewal, research reuse, immediate
 compiler cleanup and the ordinary 15-minute idle limit retain their existing
 behavior.
+
+Research turns also hold a separate `coordinator.lock` from admission through
+final output persistence, including model waits and cancellation cleanup. An OS
+process exit releases that lock. Opening a research snapshot, task status,
+WebSocket connection or pause endpoint repairs an unowned `in_progress` project
+to `paused` while holding the lock; a conditional database update avoids
+replacing a concurrent terminal status. This restores the existing Resume UI
+after a crash without a global startup status reset. An active owner in another
+worker keeps its status and rejects duplicate admission. Pausing through a
+non-owning worker returns HTTP 409 instead of pretending to cancel that task.
+Workers must run this ownership protocol together on the shared backend state;
+mixed old/new worker versions cannot provide this guarantee.
+
+Automatic reclamation recovery disables the provider's normal `_sustain` loop
+for the whole sweeper session, including nested status and transfer commands.
+Only its explicit bounded failure-retention renewal may extend a sandbox. Each
+attempt is capped by the remaining recovery deadline; after that deadline no
+automatic recovery or extra renewal is attempted. Explicit user recovery and
+normal execution retain their usual renewal loop.

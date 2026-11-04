@@ -362,11 +362,13 @@ async def _recover_delivery(handle, run_id, session, settings):
     kernel.runtime.handle = {k: v for k, v in handle.items() if k != '_path'}
     kernel._started = True  # Attach to this identity; never create or replay a job.
     kernel.pending_run = run_id
-    await kernel._retry_outputs_locked()
+    await kernel._retry_outputs_locked(renew=False)
 
 
 async def _manifest_busy(handle, *, now, ttl, settings):
     """Called with the cross-process execution lock held, including recovery."""
+    inspected_at = time.monotonic()
+    initial_now = now
     path = _manifest_path(handle)
     if path is None or not path.is_file():
         return bool(handle.get('active_run_ids'))
@@ -380,6 +382,7 @@ async def _manifest_busy(handle, *, now, ttl, settings):
     session = None
     try:
         for run_id, row in runs.items():
+            now = initial_now + (time.monotonic() - inspected_at)
             if not isinstance(row, dict):
                 return True
             if run_id in data.get('inherited_runs', []):
@@ -407,16 +410,26 @@ async def _manifest_busy(handle, *, now, ttl, settings):
             # without pending markers need no recovery.
             if row.get('submission_state') == 'acknowledged' and not pending:
                 continue
+            deadline = row.get('recovery_deadline')
+            if deadline is not None and now >= deadline:
+                return True
+            attempt_started = time.monotonic()
             try:
                 if session is None:
                     from .factory import create_session
                     session = create_session(handle['workspace'], settings=settings,
                         work_id=handle.get('work_id'), experiment_id='research', cache_key=handle['cache_key'])
+                    # Status/transfer RPCs also run commands with sustain loops.
+                    # Disable implicit renewal for the entire sweeper session.
+                    session.automatic_renewal = False
                     await asyncio.wait_for(session.attach_for_destroy(handle), 15)
                 alive = await remote_job_running(handle, run_id, row, session)
                 if alive is not False:
                     return True
-                await asyncio.wait_for(_recover_delivery(handle, run_id, session, settings), 90)
+                remaining = 90 if deadline is None else deadline - now - (time.monotonic() - attempt_started)
+                if remaining <= 0:
+                    return True
+                await asyncio.wait_for(_recover_delivery(handle, run_id, session, settings), min(90, remaining))
                 data = json.loads(path.read_text())
             except Exception as exc:
                 logger.warning('沙箱结果恢复未完成 run_id=%s error=%s', run_id, type(exc).__name__)
@@ -424,18 +437,20 @@ async def _manifest_busy(handle, *, now, ttl, settings):
                 # Reload so this error cannot overwrite that progress.
                 data = json.loads(path.read_text())
                 current = data['runs'][run_id]
-                current.setdefault('recovery_started_at', now)
-                current.setdefault('recovery_deadline', now + recovery_retention_seconds())
-                current.update(delivery_state='pending', recovery_attempted_at=now,
+                attempted_at = now + (time.monotonic() - attempt_started)
+                current.setdefault('recovery_started_at', attempted_at)
+                current.setdefault('recovery_deadline', attempted_at + recovery_retention_seconds())
+                current.update(delivery_state='pending', recovery_attempted_at=attempted_at,
                                delivery_error='结果恢复未完成：' + type(exc).__name__)
                 _write_json(path, data)
                 # Bound extra retention without declaring failed delivery complete.
                 # After the deadline, leave evidence intact and allow server TTL
                 # expiry; never forcibly kill a job whose status is uncertain.
-                if session is not None and now < current['recovery_deadline']:
+                if session is not None and attempted_at < current['recovery_deadline']:
                     try:
-                        remaining = current['recovery_deadline'] - now
-                        await asyncio.wait_for(session.renew(min(settings.max_timeout, max(60, int(remaining)))), 15)
+                        remaining = current['recovery_deadline'] - attempted_at
+                        if remaining >= 1:
+                            await asyncio.wait_for(session.renew(min(settings.max_timeout, int(remaining))), min(15, remaining))
                     except Exception:
                         pass
                 return True
@@ -741,19 +756,21 @@ async def reclaim_recorded(*, directory, projects, now=None, ttl=None, settings=
     """Delete every selected sandbox. Returns ``(sandbox_id, reason)`` pairs."""
     now = time.time() if now is None else now
     ttl = idle_ttl_seconds() if ttl is None else ttl
+    sweep_started = time.monotonic()
     activity = load_activity()
     remote = await directory.list_sandboxes() if directory is not None else []
     released = []
     immediate = force_reason in IMMEDIATE_REASONS
     for view in _candidates(remote, activity, work_id=work_id):
+        candidate_now = now + (time.monotonic() - sweep_started)
         handle = activity.get(view.id) or {}
         reason = force_reason if force_reason in {'paused', 'completed'} and (handle.get('role') or (view.metadata or {}).get('role') or 'research') != 'run' else None
         if reason is None:
-            reason = decide(view, projects=projects, activity=handle, now=now, ttl=ttl)
+            reason = decide(view, projects=projects, activity=handle, now=candidate_now, ttl=ttl)
         if reason is None:
             continue
         if await _release(view, reason, activity=activity, directory=directory, settings=settings,
-                          immediate=immediate or reason in IMMEDIATE_REASONS, now=now, ttl=ttl, projects=projects):
+                          immediate=immediate or reason in IMMEDIATE_REASONS, now=candidate_now, ttl=ttl, projects=projects):
             released.append((view.id, reason))
     return released
 

@@ -287,6 +287,8 @@ class OpenSandboxSession:
 
     async def _sustain(self, needed):
         """Keep renewing a live call so the server TTL cannot cut it off."""
+        if not getattr(self, 'automatic_renewal', True):
+            return
         try:
             while True:
                 if not getattr(self, 'sandbox', None) or not hasattr(self.sandbox, 'renew'):
@@ -402,8 +404,8 @@ class OpenSandboxSession:
         return ExecutionOutcome(error=error, exit_code=done['exit_code'],
                                 duration_seconds=done['duration_seconds'], stop_reason=reason, receipt=done)
 
-    async def _follow(self, run_id, output):
-        holder = asyncio.create_task(self._sustain(self.settings.max_timeout))
+    async def _follow(self, run_id, output, *, renew=True):
+        holder = asyncio.create_task(self._sustain(self.settings.max_timeout)) if renew else None
         try:
             while True:
                 read_failed = False
@@ -422,20 +424,26 @@ class OpenSandboxSession:
                 if read_failed or not self._cursor(run_id).get('backlog'):
                     await asyncio.sleep(self.poll_interval)
         finally:
-            holder.cancel()
-            await asyncio.gather(holder, return_exceptions=True)
+            if holder is not None:
+                holder.cancel()
+                await asyncio.gather(holder, return_exceptions=True)
 
     async def execute(self, code, run_id, output, *, timeout=180):
         self._job_outputs[run_id] = output
         await self.submit(code, run_id, timeout=timeout)
         return await self._follow(run_id, output)
 
-    async def recover(self, run_id, output):
+    async def recover(self, run_id, output, *, renew=True):
         # Resume an existing disk-backed job after client/backend disconnection.
         self._job_cursors.pop(run_id, None)
         self.active_job = run_id
         self._job_outputs[run_id] = output
-        return await self._follow(run_id, output)
+        previous = getattr(self, 'automatic_renewal', True)
+        self.automatic_renewal = previous and renew
+        try:
+            return await self._follow(run_id, output, renew=renew)
+        finally:
+            self.automatic_renewal = previous
 
     @property
     def context_id(self):
@@ -481,8 +489,9 @@ class OpenSandboxSession:
             exc.sandbox_stderr = ''.join(logs['stderr'])
             raise
         finally:
-            holder.cancel()
-            await asyncio.gather(holder, return_exceptions=True)
+            if holder is not None:
+                holder.cancel()
+                await asyncio.gather(holder, return_exceptions=True)
             if not task.done(): task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             failed.cancel()

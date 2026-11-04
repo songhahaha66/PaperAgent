@@ -405,7 +405,7 @@ class RemoteKernel:
             self._refresh_pending()
             return await self._retry_outputs_locked()
 
-    async def _retry_outputs_locked(self):
+    async def _retry_outputs_locked(self, *, renew=True):
         """Caller owns the project execution lock (also used by reclamation)."""
         from .evidence import seal_run
         from .reclaim import remember_finished
@@ -443,7 +443,9 @@ class RemoteKernel:
                         raise ValueError('恢复日志超过限额，原本地日志保留')
                     with (recovered_logs / (channel + '.log')).open('ab') as stream:
                         stream.write(raw)
-                outcome = await asyncio.wait_for(self.session.recover(run_id, output), self.timeout)
+                recovery = (self.session.recover(run_id, output) if renew else
+                            self.session.recover(run_id, output, renew=False))
+                outcome = await asyncio.wait_for(recovery, self.timeout)
                 for channel in ('stdout', 'stderr'):
                     os.replace(recovered_logs / (channel + '.log'), self.fs.run_dir(run_id) / (channel + '.log'))
             result = CellResult(ok=False, stdout='', error=None, run_id=run_id)

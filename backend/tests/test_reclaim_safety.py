@@ -159,3 +159,94 @@ def test_startup_does_not_pause_another_backend_project(monkeypatch):
         await lifecycle.aclose()
     asyncio.run(check())
     db.assert_not_called()
+
+
+@pytest.mark.parametrize('renew', [True, False])
+def test_failed_log_polling_obeys_explicit_renewal_mode(renew):
+    """Use real recover/_follow/_sustain bodies with an initially empty expiry."""
+    from types import SimpleNamespace
+    from ai_system.sandbox.opensandbox_provider import JobStatusUnavailable
+    async def check():
+        session=object.__new__(OpenSandboxSession)
+        session.settings=SandboxSettings()
+        session.poll_interval=.001
+        session._job_cursors={}
+        session._job_outputs={}
+        session.sandbox=SimpleNamespace(renew=True)
+        session.expires_at=None  # Same starting condition as attach_for_destroy.
+        calls=[]
+        async def renew_call(seconds):
+            calls.append(seconds)
+            session.expires_at=time.time()+seconds
+        async def poll(*args):
+            raise JobStatusUnavailable('logs offline')
+        session.renew=renew_call
+        session.poll=poll
+        async def output(*args): pass
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(session.recover('job',output,renew=renew),.03)
+        assert bool(calls) is renew
+    asyncio.run(check())
+
+
+def test_sweeper_missing_receipt_cannot_renew_past_deadline(tmp_path, settings, monkeypatch):
+    from types import SimpleNamespace
+    from ai_system.sandbox.opensandbox_provider import JobStatusUnavailable
+    runtime, session = _runtime(tmp_path, settings)
+    now=time.time()
+    manifest=_write_runs(runtime, {'job': {'status':'running','execution_mode':'process',
+        'submission_state':'unknown','delivery_state':'pending','cache_key':session.cache_key,
+        'provider':'fake','recovery_deadline':now+.05}})
+    # WorkspaceFS requires both maps; the production recovery body reads this file.
+    data=json.loads(manifest.read_text());data['files']={};manifest.write_text(json.dumps(data))
+    from services.file_services.workspace_fs import WorkspaceFS
+    WorkspaceFS(runtime.workspace).run_dir('job').mkdir(parents=True)
+    session.execution_mode='process'
+    session._job_cursors={};session._job_outputs={};session.poll_interval=.001
+    session.sandbox=SimpleNamespace(renew=True);session.expires_at=None
+    for name in ('recover','_follow','_sustain','_cursor'):
+        setattr(session,name,getattr(OpenSandboxSession,name).__get__(session))
+    renewed=[];polled=[]
+    async def renew(seconds):
+        renewed.append(seconds);session.expires_at=time.time()+seconds
+    async def poll(*args):
+        polled.append(True)
+        raise JobStatusUnavailable('persistent log failure')
+    async def status(*args):return False
+    session.renew=renew;session.poll=poll;session.job_status=status
+    monkeypatch.setattr('ai_system.sandbox.factory.create_session',lambda *a,**kw:session)
+    directory=Directory([_view('sb-old',created_at=0)])
+    async def sweep(stamp):
+        return await reclaim.reclaim_project('proj-1','paused',directory=directory,settings=settings,now=stamp)
+    assert asyncio.run(sweep(now))==[]
+    assert polled and not renewed
+    polled.clear()
+    assert asyncio.run(sweep(now+1))==[]
+    assert not polled and not renewed and not directory.killed
+    assert json.loads(manifest.read_text())['runs']['job']['delivery_state']=='pending'
+
+
+@pytest.mark.parametrize('automatic_renewal', [False, True])
+def test_status_command_nested_sustain_respects_sweeper_session(automatic_renewal):
+    """The RPC command has its own renewal loop, independent of job following."""
+    from types import SimpleNamespace
+    async def check():
+        session=object.__new__(OpenSandboxSession)
+        session.settings=SandboxSettings()
+        session.root='/workspace'
+        session.expires_at=None
+        session.automatic_renewal=automatic_renewal
+        session.execution_id=None
+        calls=[]
+        async def renew(seconds):
+            calls.append(seconds)
+            session.expires_at=time.time()+seconds
+        session.renew=renew
+        async def run(command, *, opts, handlers):
+            await asyncio.sleep(.01)
+            raise ConnectionError('status RPC transport failed')
+        session.sandbox=SimpleNamespace(renew=True,commands=SimpleNamespace(run=run))
+        with pytest.raises(ConnectionError):
+            await session._job_rpc('status','job')
+        assert bool(calls) is automatic_renewal
+    asyncio.run(check())

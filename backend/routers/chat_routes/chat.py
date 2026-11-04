@@ -179,7 +179,9 @@ async def get_task_status(
     if not work or work.created_by != current_user_id:
         raise HTTPException(status_code=403, detail="无权限访问")
 
-    return task_manager.get_task_status(work_id)
+    from services.chat_services.coordinator import recover_orphaned_work
+    recover_orphaned_work(db, work, get_workspace_path(work_id))
+    return {**task_manager.get_task_status(work_id), 'work_status': work.status}
 
 
 @router.get("/work/{work_id}/research")
@@ -193,6 +195,8 @@ async def get_research_snapshot(
     if not work or work.created_by != current_user_id:
         raise HTTPException(status_code=403, detail="无权限访问")
     try:
+        from services.chat_services.coordinator import recover_orphaned_work
+        recover_orphaned_work(db, work, get_workspace_path(work_id))
         status = work.status
         db.close()
         return await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, status)
@@ -213,6 +217,10 @@ async def pause_work(
         raise HTTPException(status_code=403, detail="无权限访问")
     task = task_manager.get_running_task(work_id)
     if not task:
+        from services.chat_services.coordinator import recover_orphaned_work
+        recover_orphaned_work(db, work, get_workspace_path(work_id))
+        if work.status == 'in_progress':
+            raise HTTPException(409, '任务由其他后端持有，请连接原后端暂停；当前任务未被中断')
         return {"work_status": work.status}
     original_status = work.status
     db.close()
@@ -598,6 +606,9 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
             try:
                 from services.data_services.crud import get_work
                 work = get_work(db, work_id)
+                if work and work.created_by == user_id:
+                    from services.chat_services.coordinator import recover_orphaned_work
+                    recover_orphaned_work(db, work, get_workspace_path(work_id))
                 return work
             finally:
                 db.close()
@@ -717,10 +728,23 @@ async def websocket_chat(websocket: WebSocket, work_id: str):
 
             # Reserve before asynchronous initialization; never replace another browser's task.
             try:
-                task = task_manager.create_task(work_id, user_id, problem, action=action)
+                task = task_manager.create_task(work_id, user_id, problem, action=action, workspace=get_workspace_path(work_id))
             except ValueError as exc:
                 await manager.send_to(work_id, websocket, {'type': 'error', 'scope': 'command', 'request_id': request_id, 'message': str(exc)})
                 continue
+            try:
+                current = await asyncio.to_thread(research_snapshot, get_workspace_path(work_id), work_id, original_status)
+                if (current.research_id, current.commit_seq, current.graph_status) != (snapshot.research_id, snapshot.commit_seq, snapshot.graph_status):
+                    raise ValueError('研究状态已改变，请重试')
+            except ValueError as exc:
+                task_manager._release_ownership(task)
+                task_manager._tasks.pop(work_id, None)
+                await manager.send_to(work_id, websocket, {'type': 'error', 'scope': 'command', 'request_id': request_id, 'message': str(exc)})
+                continue
+            except BaseException:
+                task_manager._release_ownership(task)
+                task_manager._tasks.pop(work_id, None)
+                raise
             task.request_id = request_id
             ai_task = asyncio.create_task(_execute_chat_task(
                 work_id, user_id, problem, action, snapshot, subproblem_id,

@@ -205,6 +205,7 @@ def research_files(root):
     from contextlib import closing
     files = {name: content for name, content in workspace_bytes(root).items()
              if name not in {'state/chat_history.json', 'state/chat_history.json.lock',
+                             'state/coordinator.lock',  # Runtime exclusion is not research evidence.
                              'state/.system/research.sqlite'}}
     with closing(sqlite3.connect(workspace_path(root, '.system/research.sqlite'))) as db:
         for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
