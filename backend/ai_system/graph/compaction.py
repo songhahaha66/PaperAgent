@@ -7,7 +7,7 @@ from typing import Any, Callable, Awaitable, Annotated
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
 from pydantic import BaseModel, ConfigDict, Field
-from .images import ImageProjection,image_value
+from .images import ImageProjection,disable_image_inputs,image_value,images_unsupported
 
 logger = logging.getLogger(__name__)
 
@@ -178,9 +178,11 @@ class ContextMiddleware(AgentMiddleware):
         previous=json.dumps(saved,ensure_ascii=False,sort_keys=True)
         media=ImageProjection(self.ctx.workspace,self.llm,saved.setdefault('image_offloads',{}))
         def estimate(value):return token_estimate(value,image_counter=media.native_tokens)
-        route=digest([type(self.llm).__module__,getattr(self.llm,'model_name',None),getattr(self.llm,'model',None),
-                      str(getattr(self.llm,'openai_api_base',None) or getattr(self.llm,'base_url',None)),
-                      static_hash,media.policy.__dict__,'vision-rules-20261031'])
+        def current_route():
+            return digest([type(self.llm).__module__,getattr(self.llm,'model_name',None),getattr(self.llm,'model',None),
+                           str(getattr(self.llm,'openai_api_base',None) or getattr(self.llm,'base_url',None)),
+                           static_hash,media.policy.__dict__,'image-input-switch'])
+        route=current_route()
         anchor=saved.get('usage_anchor') or {}
         prior=saved.get('wire',[])
         def persist():
@@ -336,9 +338,13 @@ class ContextMiddleware(AgentMiddleware):
 
         if size(view())>high:await compact()
 
+        degraded=False
         async def send():
-            nonlocal previous,prior
+            nonlocal previous,prior,media,route,degraded
+            route=current_route()
             bounded=media.view(view(),max_tokens=max(0,safe-overhead))
+            # size() projects again and clears this count; keep the decision from the request copy.
+            attached,absent_reason=media.attached,media.absent_reason
             if size(bounded)>safe:
                 raise ModelContextLimit(f'完整请求约{size(bounded)} tokens超过安全输入上限{safe}；原始记录已保留。')
             wire=[digest(messages_to_dict([m])) for m in bounded]
@@ -352,26 +358,37 @@ class ContextMiddleware(AgentMiddleware):
             saved.update(wire=wire,static_hash=static_hash)
             persist()
             prior=wire
+            if attached:logger.info('本次请求附图 %s 张',attached)
+            else:logger.info('本次请求未附图：%s',absent_reason)
             stats={'messages_estimated_tokens':estimate(messages_to_dict(bounded)),
                    'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
                    'input_limit':limit,'high_watermark':high,'low_watermark':low,'safe_input_limit':safe,
                    'compaction_target':selected_target,'summary_status':summary_status,
                    'original_messages_estimated_tokens':media.original_tokens(self.messages,estimate),
-                   'image_meter':media.policy.strategy,'image_offloaded_occurrences':len(media.omitted),
+                   'images_attached':attached,'images_absent_reason':absent_reason,
+                   'image_placement':media.policy.strategy,'image_offloaded_occurrences':len(media.omitted),
                    'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
                    'cache_phase':phase,'reused_prefix_messages':common}
-            with execution_scope(context_usage=stats):
-                wire_messages=await asyncio.to_thread(media.hydrate,bounded)
-                response=await handler(request.override(messages=wire_messages))
-                ensure_complete(response)
-                for reply in reversed(getattr(response,'result',None) or [response]):
-                    actual=(getattr(reply,'usage_metadata',None) or {}).get('input_tokens')
-                    if isinstance(actual,int) and actual>0:
-                        saved['usage_anchor']={'route':route,'wire':wire,'actual':actual,
-                            'estimated':overhead+estimate(messages_to_dict(bounded))}
-                        persist()
-                        break
-                return response
+            try:
+                with execution_scope(context_usage=stats):
+                    wire_messages=await asyncio.to_thread(media.hydrate,bounded)
+                    response=await handler(request.override(messages=wire_messages))
+                    ensure_complete(response)
+                    for reply in reversed(getattr(response,'result',None) or [response]):
+                        actual=(getattr(reply,'usage_metadata',None) or {}).get('input_tokens')
+                        if isinstance(actual,int) and actual>0:
+                            saved['usage_anchor']={'route':route,'wire':wire,'actual':actual,
+                                'estimated':overhead+estimate(messages_to_dict(bounded))}
+                            persist()
+                            break
+                    return response
+            except Exception as exc:
+                if degraded or not attached or not images_unsupported(exc):raise
+                degraded=True
+                logger.warning('图片输入被拒绝，已关闭开关并去掉图片重试一次')
+                disable_image_inputs(self.llm)
+                media=ImageProjection(self.ctx.workspace,self.llm,saved.setdefault('image_offloads',{}))
+                return await send()
         try:return await send()
         except ModelContextOverflow:
             # Only a rejected request before any response content is eligible.

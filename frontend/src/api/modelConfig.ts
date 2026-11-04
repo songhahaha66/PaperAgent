@@ -3,6 +3,7 @@ export interface GenerationSettings {
   context_window?: number | null
   reasoning_effort?: string | null
   prices?: { input_per_million: number; output_per_million: number; cached_input_per_million?: number | null } | null
+  image_inputs?: boolean
 }
 
 export interface ModelCapabilities {
