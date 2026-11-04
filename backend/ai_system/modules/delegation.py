@@ -62,7 +62,7 @@ async def delegate(ctx, inputs):
     folder=workspace_path(store.root,'.system/tasks/'+tid+'/workspace')
     folder.mkdir(parents=True,exist_ok=True)
     local=GraphContext.create(str(folder),planner_llm=ctx.planner_llm,coder_llm=ctx.coder_llm,
-                              experience_scope=ctx.experience_scope)
+                              experience_scope=ctx.experience_scope,sandbox_work_id=ctx.kernels.work_id)
     local.research=store
     aliases={name:('outputs/imported/'+version+'/'+Path(name).name if name.startswith('outputs/research/') else name)
              for name,version in sources.items()}

@@ -141,6 +141,7 @@ class OpenSandboxSession:
 
     async def _create(self, config, Sandbox, NetworkPolicy):
         from opensandbox.models import Volume, Host
+        from .reclaim import sandbox_metadata
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
         # The server starts the TTL when it accepts create. Do not add startup_timeout:
         # that made the local clock later than the real recycle time.
@@ -155,7 +156,7 @@ class OpenSandboxSession:
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
             network_policy=NetworkPolicy(default_action="deny"),
             volumes=[Volume(name='execution-cache', host=Host(path=self.volume_path), mount_path='/workspace')],
-            metadata={"application": "paperagent"},
+            metadata=sandbox_metadata(work_id=self.work_id, experiment_id=self.experiment_id, cache_key=self.cache_key),
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
