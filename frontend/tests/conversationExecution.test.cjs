@@ -20,7 +20,7 @@ const row = (status, extra = {}) => ({
     },
   })
 
-async function mount(t) {
+async function mount(t, globals = {}) {
   let pending
   const module = await loadModule(
     'src/components/ConversationExecution.vue',
@@ -35,7 +35,7 @@ async function mount(t) {
         },
       },
     },
-    { setInterval: () => 1, clearInterval() {} },
+    { setInterval: () => 1, clearInterval() {}, ...globals },
     true,
   )
   const state = vue.reactive({
@@ -213,6 +213,52 @@ test('single execution has one heading, duration and output entry', async (t) =>
   button('result.xlsx').props.onClick()
   assert.deepEqual(opened, ['outputs/result.xlsx'])
   assert.equal(button('诊断日志'), undefined, 'empty diagnostics have no entry')
+})
+
+test('group duration covers the entire span without summing nested calls', async (t) => {
+  const { state, host, heading } = await mount(t)
+  state.segments = [
+    row('completed', { started_at: 100, finished_at: 350, label: '独立子任务' }),
+    { ...row('failed', { id: 'failed', started_at: 120, finished_at: 142 }), id: 'failed' },
+    { ...row('completed', { id: 'last', started_at: 343, finished_at: 353,
+      label: '保存校验代码' }), id: 'last' },
+  ]
+  await flush()
+  assert.match(text(heading()), /保存校验代码完成3 次操作4 分 13 秒/)
+  heading().props.onClick()
+  await flush()
+  assert.match(text(host.root), /保存校验代码完成10 秒/, 'individual duration remains local to the call')
+  state.segments = [
+    row('completed', { started_at: 100, finished_at: 400 }),
+    { ...row('completed', { id: 'last', started_at: 110, finished_at: 120 }), id: 'last' },
+  ]
+  await flush()
+  assert.match(text(heading()), /2 次操作5 分 0 秒/, 'an earlier-listed parallel call may finish last')
+})
+
+test('group duration advances while running and freezes at the recorded finish', async (t) => {
+  let clock = 150
+  let tick
+  const { state, heading } = await mount(t, {
+    Date: { now: () => clock * 1000 },
+    setInterval: (callback) => { tick = callback; return 1 },
+  })
+  state.segments = [
+    row('completed', { started_at: 100, finished_at: 110 }),
+    { ...row('running', { id: 'active', started_at: 140 }), id: 'active' },
+  ]
+  await flush()
+  assert.match(text(heading()), /2 次操作50 秒/)
+  clock = 160
+  tick()
+  await flush()
+  assert.match(text(heading()), /2 次操作1 分 0 秒/)
+  state.segments = [state.segments[0],
+    { ...row('completed', { id: 'active', started_at: 140, finished_at: 170 }), id: 'active' }]
+  clock = 1000
+  tick()
+  await flush()
+  assert.match(text(heading()), /完成2 次操作1 分 10 秒/)
 })
 
 test('each grouped operation folds its own logs and retains code links', async (t) => {
