@@ -57,12 +57,14 @@ def reset_reclaim_state():
     reclaim._RECLAIMING.clear()
     reclaim._RECLAIMING_KEYS.clear()
     reclaim._LIVE.clear()
+    reclaim._ACTIVE_RUNS.clear()
     yield
     reclaim._BUSY_KEYS.clear()
     reclaim._BUSY_COUNTS.clear()
     reclaim._RECLAIMING.clear()
     reclaim._RECLAIMING_KEYS.clear()
     reclaim._LIVE.clear()
+    reclaim._ACTIVE_RUNS.clear()
 
 
 @pytest.fixture
@@ -85,6 +87,25 @@ def test_metadata_marks_research_and_run_sandboxes():
     assert research == {'application': 'paperagent', 'role': 'research', 'cache_key': 'abc', 'work_id': 'proj-1'}
     compiler = sandbox_metadata(work_id=None, experiment_id='compiler', cache_key='def')
     assert compiler['role'] == 'run' and 'work_id' not in compiler
+
+
+def test_metadata_values_are_kubernetes_labels():
+    import re
+    from ai_system.sandbox.reclaim import label_value
+    digest = '484ceb8e' + ('ab' * 26) + '4342'
+    assert len(digest) == 64
+    label = re.compile(r'^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,61}[A-Za-z0-9])?$')
+    samples = [
+        sandbox_metadata(work_id='proj-1', experiment_id='research', cache_key=digest),
+        sandbox_metadata(work_id='项目 id/with spaces', experiment_id='compiler', cache_key=digest),
+        sandbox_metadata(work_id='a' * 80, experiment_id='task-1', cache_key='not-a-digest'),
+    ]
+    assert samples[0]['cache_key'] == digest[:32]
+    assert samples[0]['cache_key'] == label_value(digest)
+    for meta in samples:
+        assert meta
+        for key, value in meta.items():
+            assert isinstance(value, str) and len(value) <= 63 and label.fullmatch(value), (key, value)
 
 
 def _view(sandbox_id, *, role='research', work_id='proj-1', created_at=0, cache_key='cache'):
@@ -202,7 +223,7 @@ def test_paused_completed_and_deleted_reclaim_without_waiting(caplog):
         assert f'reason={reason}' in caplog.text
 
 
-def test_running_manifest_and_active_run_are_not_reclaimed(tmp_path, settings):
+def _runtime(tmp_path, settings, **extra):
     workspace = (tmp_path / 'project').resolve()
     workspace.mkdir()
     session = Track(workspace, settings=settings)
@@ -210,24 +231,102 @@ def test_running_manifest_and_active_run_are_not_reclaimed(tmp_path, settings):
     runtime.save(state='detached', sandbox_id='sb-old', context_id='ctx', expires_at=time.time() + 3600,
                  work_id='proj-1', role='research', last_job_at=time.time() - 5000,
                  workspace=str(runtime.workspace.absolute()), cache_key=session.cache_key,
-                 deployment=runtime.deployment, active_run_ids=['run-1'])
+                 deployment=runtime.deployment, **extra)
+    return runtime, session
+
+
+def _write_runs(runtime, runs):
+    manifest = runtime.path.parents[2] / 'manifest.json'
+    manifest.write_text(json.dumps({'runs': runs}))
+    return manifest
+
+
+def test_in_process_run_and_live_remote_job_are_not_reclaimed(tmp_path, settings, monkeypatch):
+    runtime, session = _runtime(tmp_path, settings, active_run_ids=['run-1'])
     directory = Directory([_view('sb-old', created_at=0, cache_key=session.cache_key)])
+    from ai_system.sandbox import reclaim as reclaim_mod
+    reclaim_mod._ACTIVE_RUNS.add('run-1')
 
     async def run():
         released = await reclaim_project('proj-1', 'paused', directory=directory, settings=settings, ttl=900)
         assert released == [] and directory.killed == []
         assert json.loads(runtime.path.read_text())['sandbox_id'] == 'sb-old'
+        reclaim_mod._ACTIVE_RUNS.clear()
         saved = json.loads(runtime.path.read_text())
         saved['active_run_ids'] = []
         runtime.path.write_text(json.dumps(saved))
-        manifest = runtime.path.parents[2] / 'manifest.json'
-        manifest.write_text(json.dumps({'runs': {'run-9': {
-            'status': 'running', 'execution_mode': 'process', 'submission_state': 'unknown'}}}))
+        _write_runs(runtime, {'run-9': {
+            'status': 'running', 'execution_mode': 'process', 'submission_state': 'unknown',
+            'compute_state': 'running', 'process_receipt': None, 'phase_started_at': time.time()}})
+        monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: True)
         released = await reclaim_project('proj-1', 'deleted', directory=directory, settings=settings, ttl=900)
         assert released == [] and directory.killed == []
         assert json.loads(runtime.path.read_text())['sandbox_id'] == 'sb-old'
 
     asyncio.run(run())
+
+
+def test_crash_before_submit_is_stale_and_reclaimed(tmp_path, settings):
+    runtime, session = _runtime(tmp_path, settings)
+    manifest = _write_runs(runtime, {'run-1': {
+        'status': 'starting', 'submission_state': 'not_submitted', 'compute_state': 'not_started',
+        'execution_mode': 'process', 'process_receipt': None}})
+    directory = Directory([_view('sb-old', created_at=0, cache_key=session.cache_key)])
+
+    async def run():
+        released = await reclaim_project('proj-1', 'paused', directory=directory, settings=settings, ttl=900)
+        assert released == [('sb-old', 'paused')]
+        assert directory.killed == ['sb-old']
+
+    asyncio.run(run())
+    row = json.loads(manifest.read_text())['runs']['run-1']
+    assert row['status'] == 'interrupted'
+    assert row['failure_kind'] == 'preparation'
+    assert row['submission_state'] == 'not_submitted'
+    assert '未执行' in row['error']
+
+
+def test_crash_after_submit_follows_the_remote_process(tmp_path, settings, monkeypatch):
+    runtime, session = _runtime(tmp_path, settings, active_run_ids=['run-2'])
+    stale = {
+        'status': 'running', 'submission_state': 'unknown', 'compute_state': 'running',
+        'execution_mode': 'process', 'process_receipt': None, 'phase_started_at': time.time() - 5000,
+    }
+    manifest = _write_runs(runtime, {'run-2': dict(stale)})
+    directory = Directory([_view('sb-old', created_at=0, cache_key=session.cache_key)])
+    from ai_system.sandbox import reclaim as reclaim_mod
+
+    async def reclaim():
+        return await reclaim_project('proj-1', 'paused', directory=directory, settings=settings, ttl=900)
+
+    monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: True)
+    assert asyncio.run(reclaim()) == []
+    assert directory.killed == []
+    assert json.loads(manifest.read_text())['runs']['run-2']['status'] == 'running'
+
+    monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: False)
+    assert asyncio.run(reclaim()) == [('sb-old', 'paused')]
+    row = json.loads(manifest.read_text())['runs']['run-2']
+    assert row['status'] == 'interrupted'
+    assert row['failure_kind'] == 'transport_unknown'
+    assert row['submission_state'] == 'unknown'
+    assert json.loads(runtime.path.read_text())['active_run_ids'] == []
+
+
+def test_short_cache_label_matches_a_held_sandbox():
+    digest = 'a' * 64
+    from ai_system.sandbox.reclaim import hold_key, release_key
+    hold_key(digest)
+    directory = Directory([_view('sb', created_at=0, cache_key=digest[:32])])
+
+    async def run():
+        try:
+            return await sweep_once(directory=directory, projects={'proj-1': 'paused'}, settings=object(), now=10_000, ttl=900)
+        finally:
+            release_key(digest)
+
+    assert asyncio.run(run()) == []
+    assert directory.killed == []
 
 
 def test_reclaim_clears_stale_id_and_the_next_start_creates(tmp_path, settings, monkeypatch, caplog):
