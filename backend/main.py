@@ -5,6 +5,7 @@ from database.database import engine
 from sqlalchemy.orm import Session
 from routers import all_routers, project_route_access
 from fastapi import Depends
+import asyncio
 import uvicorn
 import logging
 
@@ -54,7 +55,21 @@ async def lifespan(app: FastAPI):
     if stale:
         logger.info(f"{stale} 个中断的工作已标记为暂停")
 
-    yield
+    from ai_system.sandbox.reclaim import bind_loop, sweep_forever, sweep_once
+    bind_loop(asyncio.get_running_loop())
+    try:
+        await asyncio.wait_for(sweep_once(), 30)
+    except Exception:
+        logger.warning('启动时沙箱清扫未完成', exc_info=True)
+    sweeper = asyncio.create_task(sweep_forever())
+    try:
+        yield
+    finally:
+        sweeper.cancel()
+        try:
+            await sweeper
+        except asyncio.CancelledError:
+            pass
     # 关闭时执行
     logger.info("正在关闭应用...")
 

@@ -536,6 +536,12 @@ def update_work_status(db: Session, work_id: str, status: str, user_id: int = No
 
         db.commit()
         db.refresh(db_work)
+        if status in {'paused', 'completed'}:
+            try:
+                from ai_system.sandbox.reclaim import request_reclaim
+                request_reclaim(work_id, status)
+            except Exception:
+                logger.warning('项目状态已更新，沙箱回收失败 project_id=%s reason=%s', work_id, status, exc_info=True)
         return db_work
     except Exception as e:
         db.rollback()

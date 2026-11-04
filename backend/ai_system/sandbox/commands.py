@@ -46,26 +46,31 @@ def sandbox_operation(function=None, *, input_selector=None):
             inputs={p:bounded_hash(v,settings.max_file_bytes) for p,v in input_files(fs,compiler=True,verified_snapshot=verified_snapshot,names=input_names).items() if p!='.build/reference.docx'}
             semantic_args=json.dumps([args,kwargs],default=str,sort_keys=True).replace(str(root),'/workspace')
             cache_key=_digest(['compiler-api-v1',str(project_root(root)),settings.image,settings.cpu,settings.memory,function.__qualname__,inputs,semantic_args])
-            session=create_session(root,settings=settings,cache_key=cache_key)
-            from .runtime_manager import RuntimeManager
-            runtime=RuntimeManager(project_root(root),session,settings)
-            transfer=WorkspaceTransfer(fs,session,settings,compiler=True,verified_snapshot=verified_snapshot,input_names=input_names)
-            records=workspace_path(project_root(root),'.system/compiler-receipts/'+cache_key)
-            state={'session':session,'settings':settings,'transfer':transfer,'root':root,'records':records,'ordinals':{}}
-            token=None
+            session=create_session(root,settings=settings,cache_key=cache_key,experiment_id='compiler')
+            from .reclaim import hold_key, release_key
+            hold_key(session.cache_key)
             try:
-                await asyncio.wait_for(runtime.start(),settings.startup_timeout)
-                token=_ACTIVE.set(state)
-                return await function(root,*args,**kwargs)
-            except Exception as exc:
-                detail=str(exc).replace(settings.api_key,'[redacted]') if settings.api_key else str(exc)
-                raise RuntimeError(detail[:settings.max_log_bytes]) from None
-            finally:
-                if token is not None:_ACTIVE.reset(token)
+                from .runtime_manager import RuntimeManager
+                runtime=RuntimeManager(project_root(root),session,settings)
+                transfer=WorkspaceTransfer(fs,session,settings,compiler=True,verified_snapshot=verified_snapshot,input_names=input_names)
+                records=workspace_path(project_root(root),'.system/compiler-receipts/'+cache_key)
+                state={'session':session,'settings':settings,'transfer':transfer,'root':root,'records':records,'ordinals':{}}
+                token=None
                 try:
-                    await runtime.destroy()
-                except Exception:
-                    raise RuntimeError('编译沙箱销毁未确认；保留原身份和租约，不会重放同一编译，请核实原运行或等待TTL') from None
+                    await asyncio.wait_for(runtime.start(),settings.startup_timeout)
+                    token=_ACTIVE.set(state)
+                    return await function(root,*args,**kwargs)
+                except Exception as exc:
+                    detail=str(exc).replace(settings.api_key,'[redacted]') if settings.api_key else str(exc)
+                    raise RuntimeError(detail[:settings.max_log_bytes]) from None
+                finally:
+                    if token is not None:_ACTIVE.reset(token)
+                    try:
+                        await runtime.destroy()
+                    except Exception:
+                        raise RuntimeError('编译沙箱销毁未确认；保留原身份和租约，不会重放同一编译，请核实原运行或等待TTL') from None
+            finally:
+                release_key(session.cache_key)
     return wrapped
 
 

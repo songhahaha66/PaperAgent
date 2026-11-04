@@ -52,9 +52,12 @@ class RemoteKernel:
         await self.runtime.start()
         self._started = True
         self._save_storage()
+        from .reclaim import register_kernel
+        register_kernel(self)
 
     async def _start(self, needed=None):
         from .lifetime import REPLACED_NOTE
+        from .reclaim import register_kernel
         needed = self.timeout if needed is None else needed
         if not self._started:
             await self.runtime.start()
@@ -69,6 +72,7 @@ class RemoteKernel:
             await self.runtime.start()
             self._started = True
             self._save_storage()
+        register_kernel(self)
 
     def _freeze_inputs(self, run_id):
         from .evidence import freeze_inputs
@@ -91,14 +95,20 @@ class RemoteKernel:
             info.update(finalize_pending=False, pending_files=None)
             self.fs._save_manifest()
 
+    def _mark_reclaimed(self):
+        self._started = False
+        self.transfer.seen = None
+
     async def _stop(self):
         if self.pending_run and getattr(self.session, 'execution_mode', None) == 'process':
             raise RuntimeError('原任务日志或文件尚未取全；请先 retry_outputs，暂不销毁沙箱')
+        from .reclaim import unregister_kernel
         try:
             await asyncio.wait_for(self.runtime.destroy(), 20)
         finally:
             self._started = False
             self.transfer.seen=None
+            unregister_kernel(self)
 
     def _record_outcome(self, run_id, outcome, result):
         """Commit the on-disk process receipt before any fallible file delivery."""
@@ -122,7 +132,8 @@ class RemoteKernel:
 
     async def execute(self, code, *, on_event=None):
         from .lifetime import RETRIED_NOTE, RETRY_FAILED_PREFIX
-        async with self._lock, self.execution_scope.operation(self, self.timeout):
+        from .reclaim import runtime_hold
+        async with self._lock, self.execution_scope.operation(self, self.timeout), runtime_hold(self):
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
                     run_id=self.pending_run, failure_kind='delivery')
@@ -193,6 +204,7 @@ class RemoteKernel:
             cancelled = False
             execution_finished = False
             submitted = False
+            noted = False
             phase = 'snapshot_inputs'
             def stage(name):
                 nonlocal phase
@@ -230,6 +242,9 @@ class RemoteKernel:
                 submitted=True
                 info.update(submission_state='submitting',compute_state='running')
                 self.fs._save_manifest()
+                from .reclaim import remember_submission
+                remember_submission(self, run_id)
+                noted = True
                 execution = (self.session.execute(code, run_id, output, timeout=self.timeout) if process_job
                              else self.session.execute(code, run_id, output))
                 outcome = await asyncio.wait_for(execution, self.timeout)
@@ -356,6 +371,9 @@ class RemoteKernel:
                         self.pending_run = run_id
                 await event("finished", status=status, error=result.error, files=result.files,
                             delivery_error=result.delivery_error)
+                if noted and (execution_finished or result.failure_kind == 'sandbox_lost' or not process_job):
+                    from .reclaim import remember_finished
+                    remember_finished(self, run_id)
             return result
 
     def _safe_error(self, error):
@@ -365,7 +383,8 @@ class RemoteKernel:
 
     async def retry_outputs(self):
         from .evidence import seal_run
-        async with self._lock, self.execution_scope.operation(self, self.timeout):
+        from .reclaim import remember_finished, runtime_hold
+        async with self._lock, self.execution_scope.operation(self, self.timeout), runtime_hold(self):
             if not self.pending_run:
                 return None
             run_id = self.pending_run
@@ -421,6 +440,7 @@ class RemoteKernel:
             info['delivery_state'] = 'available'
             if not info.get('error'):info['failure_stage']=None
             self.fs._save_manifest()
+            remember_finished(self, run_id)
             self.pending_run = None
             return run_id
 
@@ -433,12 +453,14 @@ class RemoteKernel:
 
     async def disconnect(self):
         """Release client resources without discarding the remote interpreter."""
+        from .reclaim import unregister_kernel
         async with self._lock:
             try:
                 await self.runtime.disconnect()
             finally:
                 self._started=False
                 self.transfer.seen=None
+                unregister_kernel(self)
                 await self.execution_scope.release(self)
 
     async def __aenter__(self):
