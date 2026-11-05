@@ -24,7 +24,7 @@
           shape="square"
           variant="text"
           @click="toggleSidebar"
-          class="sidebar-toggle-btn"
+          class="sidebar-toggle-btn pa-icon-button"
           :title="t('sidebar.toggle')"
           :aria-label="t('sidebar.toggle')"
           ><SidebarToggleIcon :collapsed="false"
@@ -137,7 +137,9 @@
       <SidebarToggleIcon />
     </button>
     <router-link to="/home" class="mobile-brand"
-      ><img src="/logo.png" alt="" /><span class="paperagent-wordmark">PaperAgent</span></router-link
+      ><img src="/logo.png" alt="" /><span class="paperagent-wordmark"
+        >PaperAgent</span
+      ></router-link
     >
     <div class="mobile-account">
       <AccountMenu :collapsed="true" placement="bottom-right" @navigate="closeSidebarOnMobile" />
@@ -341,12 +343,6 @@ onUnmounted(() => {
 }
 .header-controls {
   margin-left: auto;
-}
-.sidebar-toggle-btn {
-  width: var(--pa-control-height-sm);
-  height: var(--pa-control-height-sm);
-  border-radius: var(--pa-radius-control);
-  color: var(--pa-muted);
 }
 .collapsed-logo-section {
   display: flex;

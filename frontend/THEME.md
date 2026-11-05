@@ -5,21 +5,26 @@
 consume tokens; they do not redefine theme values. Set `theme-mode="light"` or
 `theme-mode="dark"` on the root element. The default is light.
 
-| Purpose | Token |
-| --- | --- |
-| Page, panel, secondary surface | `--pa-page`, `--pa-surface`, `--pa-surface-muted` |
-| Hover and pressed surfaces | `--pa-surface-hover`, `--pa-surface-active` |
-| Main, secondary, placeholder, disabled text | `--pa-ink`, `--pa-muted`, `--pa-placeholder`, `--pa-disabled` |
-| Dividers and control outlines | `--pa-line`, `--pa-line-strong` |
-| Primary action, hover, pressed | `--pa-accent`, `--pa-accent-hover`, `--pa-accent-active` |
-| Selected surfaces and text on filled actions | `--pa-accent-soft`, `--pa-on-accent` |
-| Information, annotations, warnings, errors | `--pa-info`, `--pa-note`, `--pa-warning`, `--pa-danger` and their soft backgrounds |
-| Inline code and small labels | `--pa-radius-inline` (4px) |
-| Buttons, form controls, navigation items | `--pa-radius-control` (8px) |
-| Cards, file previews, message composers | `--pa-radius-card` (12px) |
-| Dialogs and popup menus | `--pa-radius-overlay` (16px) |
-| Pills and circles | `--pa-radius-pill`, `--pa-radius-circle` |
-| Compact, standard, large controls | `--pa-control-height-sm/md/lg` (28/36/40px) |
+| Purpose                                      | Token                                                                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Page, panel, secondary surface               | `--pa-page`, `--pa-surface`, `--pa-surface-muted`                                  |
+| Hover and pressed surfaces                   | `--pa-surface-hover`, `--pa-surface-active`                                        |
+| Main, secondary, placeholder, disabled text  | `--pa-ink`, `--pa-muted`, `--pa-placeholder`, `--pa-disabled`                      |
+| Dividers and control outlines                | `--pa-line`, `--pa-line-strong`                                                    |
+| Primary action, hover, pressed               | `--pa-accent`, `--pa-accent-hover`, `--pa-accent-active`                           |
+| Selected surfaces and text on filled actions | `--pa-accent-soft`, `--pa-on-accent`                                               |
+| Information, annotations, warnings, errors   | `--pa-info`, `--pa-note`, `--pa-warning`, `--pa-danger` and their soft backgrounds |
+| Inline code and small labels                 | `--pa-radius-inline` (4px)                                                         |
+| Buttons, form controls, navigation items     | `--pa-radius-control` (8px)                                                        |
+| Cards, file previews, message composers      | `--pa-radius-card` (12px)                                                          |
+| Dialogs and popup menus                      | `--pa-radius-overlay` (16px)                                                       |
+| Icon actions, composer action radius         | `--pa-control-height-icon` (32px), `--pa-radius-action` (10px)                     |
+| Pills and circles                            | `--pa-radius-pill`, `--pa-radius-circle`                                           |
+| Compact, standard, large controls            | `--pa-control-height-sm/md/lg` (28/36/40px)                                        |
+
+Use `pa-icon-button` for icon-only toolbar actions and add `pa-send-button` for the
+primary composer action. Compact attachment removal uses the 28px height token.
+Status badges use a soft background so they do not compete with primary actions.
 
 Zero radius is allowed when a child sits flush inside a parent. Logo/image dimensions,
 layout heights and text line heights are independent of control heights. Authored DOCX

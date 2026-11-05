@@ -23,8 +23,9 @@
               ><t-button
                 theme="default"
                 variant="text"
-                shape="circle"
+                shape="square"
                 size="small"
+                class="pa-icon-button"
                 :disabled="creating"
                 :aria-label="`${isZh ? '移除附件' : 'Remove attachment'} ${file.name}`"
                 @click="files.splice(index, 1)"
@@ -60,8 +61,8 @@
               ><t-button
                 theme="default"
                 variant="text"
-                shape="circle"
-                class="attach-button"
+                shape="square"
+                class="attach-button pa-icon-button"
                 :disabled="creating"
                 :aria-label="ui.attachments"
                 @click="attachmentInput?.click()"
@@ -70,14 +71,15 @@
             <t-button
               theme="default"
               variant="text"
-              shape="round"
+              shape="rectangle"
               class="layout-button"
               :disabled="creating"
               :aria-expanded="layoutOpen"
               aria-controls="composer-layout-settings"
               :aria-label="ui.template"
               @click="layoutOpen = !layoutOpen"
-              ><t-icon name="file-copy" /><span>{{ ui.template }}</span></t-button>
+              ><t-icon name="file-copy" /><span>{{ ui.template }}</span></t-button
+            >
             <div class="composer-spacer" />
             <t-select
               v-model="mode"
@@ -94,8 +96,8 @@
             <t-tooltip :content="creating ? ui.starting : ui.start"
               ><t-button
                 theme="primary"
-                shape="circle"
-                class="start-button"
+                shape="square"
+                class="start-button pa-icon-button pa-send-button"
                 :loading="creating"
                 :disabled="!question.trim() || creating"
                 :aria-label="creating ? ui.starting : ui.start"
@@ -556,18 +558,11 @@ onMounted(async () => {
   padding: 4px 0 0;
   min-height: 40px;
 }
-.composer-toolbar .attach-button {
-  width: var(--pa-control-height-md);
-  height: var(--pa-control-height-md);
-  color: var(--pa-ink);
-  font-size: 17px;
-  flex-shrink: 0;
-}
 .composer-toolbar .layout-button {
   font-size: 13px;
   font-weight: 400;
   color: var(--pa-ink);
-  height: var(--pa-control-height-md);
+  height: var(--pa-control-height-icon);
   padding: 0 10px;
 }
 .layout-button :deep(.t-button__text) {
@@ -594,27 +589,14 @@ onMounted(async () => {
   color: var(--pa-ink);
   font-size: 13px;
   font-weight: 400;
-  height: var(--pa-control-height-md);
-  min-height: var(--pa-control-height-md);
+  height: var(--pa-control-height-icon);
+  min-height: var(--pa-control-height-icon);
 }
 .format-select :deep(.t-input:hover) {
   background: var(--pa-surface-muted) !important;
 }
 .format-select :deep(.t-input__suffix) {
   color: var(--pa-placeholder);
-}
-.composer-toolbar .start-button {
-  width: var(--pa-control-height-md);
-  height: var(--pa-control-height-md);
-  min-width: var(--pa-control-height-md);
-  flex-shrink: 0;
-  margin: 0 0 0 2px;
-  font-size: 17px;
-}
-.composer-toolbar .start-button.t-is-disabled {
-  background: var(--pa-surface-hover);
-  color: var(--pa-placeholder);
-  border-color: var(--pa-line);
 }
 .attachment-chips {
   display: flex;
@@ -643,11 +625,8 @@ onMounted(async () => {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.attachment-chip .t-button {
-  width: var(--pa-control-height-sm);
-  height: var(--pa-control-height-sm);
-  flex-shrink: 0;
-  font-size: 13px;
+.attachment-chip .pa-icon-button {
+  --pa-control-height-icon: var(--pa-control-height-sm);
 }
 .composer-meta {
   display: flex;
