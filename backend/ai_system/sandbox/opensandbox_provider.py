@@ -335,6 +335,10 @@ class OpenSandboxSession:
             if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
                 raise ValueError('Invalid process completion receipt')
             return False
+        # lost/alive False is a positive observation that the supervisor and child
+        # are gone. A failed status RPC still raises and stays unknown.
+        if value.get('lost') is True or value.get('alive') is False:
+            return False
         # A submitted supervisor without a receipt may still be running.
         return True if value.get('submitted') else None
 
@@ -387,15 +391,19 @@ class OpenSandboxSession:
         done = value.get('done')
         drained = all(row['offset'] == row['size'] for row in value['logs'].values())
         cursor['backlog'] = not drained
-        if done is None or not drained:
+        lost = done is None and (value.get('lost') is True or value.get('alive') is False)
+        if (done is None and not lost) or not drained:
             return None
-        if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
-            raise ValueError('Invalid process completion receipt')
         if not cursor['flushed']:
             for channel, decoder in cursor['decoders'].items():
                 if text := decoder.decode(b'', final=True):
                     await output(channel, text)
             cursor['flushed'] = True
+        if lost:
+            return ExecutionOutcome(error='执行进程已消失，没有完成回执；计算未完成，不会自动重跑',
+                                    exit_code=None, stop_reason='lost', receipt=None)
+        if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
+            raise ValueError('Invalid process completion receipt')
         reason = done.get('stop_reason')
         error = {'timeout': '代码执行超时，当前进程已停止；日志和工作区文件保留',
                  'cancelled': '执行已取消，当前进程已停止',

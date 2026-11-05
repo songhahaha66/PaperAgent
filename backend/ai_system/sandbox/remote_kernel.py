@@ -145,6 +145,32 @@ class RemoteKernel:
             atomic_write(self.fs.run_dir(run_id) / 'done.json', lambda f: f.write(json.dumps(outcome.receipt).encode()))
         self.fs._save_manifest()
 
+    async def _settle_lost(self, run_id, outcome, result):
+        """The supervisor and child are gone and will never write a receipt."""
+        result.error = self._safe_error(outcome.error or '执行进程已消失，没有完成回执')
+        result.ok = False
+        result.timed_out = False
+        result.failure_kind = 'lost'
+        result.exit_code = None
+        result.duration_seconds = outcome.duration_seconds
+        result.delivery_error = None
+        info = self.fs.get_run_info(run_id)
+        info.update(submission_state='lost', compute_state='lost', failure_kind='lost',
+                    error=result.error, exit_code=None, delivery_error=None,
+                    delivery_state='unavailable', finalize_pending=False)
+        info.pop('process_receipt', None)
+        self.fs._save_manifest()
+        try:
+            result.files = await asyncio.wait_for(self._collect(run_id), 60)
+            info['files'] = result.files
+            info['delivery_state'] = 'available'
+            info['delivery_error'] = None
+            self.fs._save_manifest()
+        except Exception:
+            result.files = list(result.files or [])
+            info.update(delivery_state='unavailable', delivery_error=None, finalize_pending=False)
+            self.fs._save_manifest()
+
     async def execute(self, code, *, on_event=None):
         from .lifetime import RETRIED_NOTE, RETRY_FAILED_PREFIX
         from .reclaim import runtime_hold
@@ -264,29 +290,34 @@ class RemoteKernel:
                 execution = (self.session.execute(code, run_id, output, timeout=self.timeout) if process_job
                              else self.session.execute(code, run_id, output))
                 outcome = await asyncio.wait_for(execution, self.timeout)
-                self._record_outcome(run_id, outcome, result)
-                execution_finished = True
-                # Commit the execution receipt before any fallible output preparation.
-                info.update(status='success' if result.ok else 'error', error=result.error,
-                            failure_kind=result.failure_kind, finalize_pending=True,
-                            delivery_error='计算已结束，文件交付尚未完成')
-                self.fs._save_manifest()
-                stage('finalize_outputs')
-                try:
-                    await self._finalize(run_id)
-                except Exception as exc:
-                    result.delivery_error = self._safe_error(exc)
-                    info['failure_stage']='finalize_outputs'
-                stage('deliver_outputs')
-                for attempt in range(2):
+                if outcome.stop_reason == 'lost':
+                    await self._settle_lost(run_id, outcome, result)
+                    execution_finished = True
+                else:
+                    self._record_outcome(run_id, outcome, result)
+                    execution_finished = True
+                    # Commit the execution receipt before any fallible output preparation.
+                    info.update(status='success' if result.ok else 'error', error=result.error,
+                                failure_kind=result.failure_kind, finalize_pending=True,
+                                delivery_error='计算已结束，文件交付尚未完成')
+                    self.fs._save_manifest()
+                if result.failure_kind != 'lost':
+                    stage('finalize_outputs')
                     try:
-                        result.files = await asyncio.wait_for(self._collect(run_id), 60)
-                        break
+                        await self._finalize(run_id)
                     except Exception as exc:
-                        if attempt:
-                            result.delivery_error = '\n'.join(filter(None, [result.delivery_error, self._safe_error(exc)]))
-                if result.delivery_error:
-                    self.pending_run = run_id
+                        result.delivery_error = self._safe_error(exc)
+                        info['failure_stage']='finalize_outputs'
+                    stage('deliver_outputs')
+                    for attempt in range(2):
+                        try:
+                            result.files = await asyncio.wait_for(self._collect(run_id), 60)
+                            break
+                        except Exception as exc:
+                            if attempt:
+                                result.delivery_error = '\n'.join(filter(None, [result.delivery_error, self._safe_error(exc)]))
+                    if result.delivery_error:
+                        self.pending_run = run_id
             except asyncio.CancelledError:
                 if execution_finished:
                     result.delivery_error = '文件交付已中断，请调用 retry_outputs，不要重算。'
@@ -330,18 +361,28 @@ class RemoteKernel:
                             'timeout' if result.timed_out else 'cancelled'), 30)
                         if outcome is None:
                             raise RuntimeError('原任务尚无停止回执')
-                        self._record_outcome(run_id, outcome, result)
+                        if outcome.stop_reason == 'lost':
+                            await self._settle_lost(run_id, outcome, result)
+                        else:
+                            self._record_outcome(run_id, outcome, result)
+                            result.files = await asyncio.wait_for(self._collect(run_id), 60)
                         execution_finished = True
-                        result.files = await asyncio.wait_for(self._collect(run_id), 60)
                     except Exception as exc:
-                        result.delivery_error = '进程停止或文件回收尚未确认，保留沙箱和原任务：' + self._safe_error(exc)
-                        self.pending_run = run_id
-                info.update(failure_stage=('execute' if execution_finished and result.error else
-                    info.get('failure_stage') or phase) if result.error or result.delivery_error else None,
-                    submission_state=('acknowledged' if execution_finished else 'unknown' if submitted else 'not_submitted'),
-                    compute_state=('timed_out' if result.timed_out else 'cancelled' if cancelled else 'code_error' if result.error else 'succeeded') if execution_finished else
-                                  'unknown' if submitted and process_job else 'timed_out' if submitted and result.timed_out else 'unknown' if submitted else 'not_started',
-                    delivery_state='pending' if result.delivery_error else 'available' if execution_finished else 'not_started')
+                        if result.failure_kind != 'lost':
+                            result.delivery_error = '进程停止或文件回收尚未确认，保留沙箱和原任务：' + self._safe_error(exc)
+                            self.pending_run = run_id
+                if result.failure_kind == 'lost':
+                    info.update(failure_stage='execute', submission_state='lost', compute_state='lost',
+                                delivery_state=info.get('delivery_state') if info.get('delivery_state') in {'available', 'unavailable'} else 'unavailable',
+                                delivery_error=None, finalize_pending=False, error=result.error,
+                                failure_kind='lost', exit_code=None, files=result.files)
+                else:
+                    info.update(failure_stage=('execute' if execution_finished and result.error else
+                        info.get('failure_stage') or phase) if result.error or result.delivery_error else None,
+                        submission_state=('acknowledged' if execution_finished else 'unknown' if submitted else 'not_submitted'),
+                        compute_state=('timed_out' if result.timed_out else 'cancelled' if cancelled else 'code_error' if result.error else 'succeeded') if execution_finished else
+                                      'unknown' if submitted and process_job else 'timed_out' if submitted and result.timed_out else 'unknown' if submitted else 'not_started',
+                        delivery_state='pending' if result.delivery_error else 'available' if execution_finished else 'not_started')
                 if result.failure_kind == 'sandbox_lost':
                     # The server already dropped this runtime. Destroying it can stick
                     # the lease in an unconfirmed state and block the one rebuild.
@@ -371,7 +412,8 @@ class RemoteKernel:
                     diagnostic = ('\n' + result.error).encode('utf-8')[:remaining].decode('utf-8', errors='ignore')
                     with (self.fs.run_dir(run_id) / "stderr.log").open("a", encoding="utf-8") as stream:
                         stream.write(diagnostic)
-                status = "cancelled" if cancelled else "timeout" if result.timed_out else "success" if result.ok else "error"
+                status = ("interrupted" if result.failure_kind == "lost" else
+                          "cancelled" if cancelled else "timeout" if result.timed_out else "success" if result.ok else "error")
                 info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
                             failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
                 self.fs.finish_run(run_id, status)
@@ -448,6 +490,13 @@ class RemoteKernel:
                 outcome = await asyncio.wait_for(recovery, self.timeout)
                 for channel in ('stdout', 'stderr'):
                     os.replace(recovered_logs / (channel + '.log'), self.fs.run_dir(run_id) / (channel + '.log'))
+            if outcome.stop_reason == 'lost':
+                result = CellResult(ok=False, stdout='', error=None, run_id=run_id)
+                await self._settle_lost(run_id, outcome, result)
+                self.fs.finish_run(run_id, 'interrupted')
+                remember_finished(self, run_id)
+                self.pending_run = None
+                return run_id
             result = CellResult(ok=False, stdout='', error=None, run_id=run_id)
             self._record_outcome(run_id, outcome, result)
             info.update(error=result.error, failure_kind=result.failure_kind, finalize_pending=False)

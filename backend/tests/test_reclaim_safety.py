@@ -109,11 +109,66 @@ def test_reclaim_recovers_original_completed_job_and_files(tmp_path, monkeypatch
     asyncio.run(check())
 
 
+def test_dead_job_without_receipt_is_marked_lost_and_reclaimed(tmp_path, monkeypatch, reset_reclaim_state):
+    async def check():
+        import os
+        import signal
+        from ai_system.sandbox import job_worker
+        from ai_system.sandbox.runtime_manager import RuntimeManager
+        from services.file_services.workspace_fs import WorkspaceFS
+        settings = SandboxSettings(provider='fake')
+        session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server', settings=settings)
+        session.work_id = 'proj-1'
+        await session.start()
+        session.id = 'sb-old'
+        runtime = RuntimeManager(session.backend_root, session, settings)
+        runtime.save(state='detached', sandbox_id='sb-old', context_id='ctx', expires_at=time.time() + 3600,
+                     work_id='proj-1', role='research', last_job_at=time.time() - 5000,
+                     workspace=str(runtime.workspace.absolute()), cache_key=session.cache_key,
+                     deployment=runtime.deployment)
+        fs = WorkspaceFS(session.backend_root)
+        run_id = fs.create_run()
+        target = job_worker.directory(session.remote, run_id)
+        request = {'job_id': run_id, 'code': 'import time\ntime.sleep(30)\n', 'timeout': 30, 'max_log_bytes': 100000}
+        (target / 'request.json').write_text(json.dumps(request))
+        job_worker.submit(str(session.remote), run_id)
+        for _ in range(50):
+            if (target / 'process.json').exists():
+                break
+            await asyncio.sleep(0.05)
+        record = json.loads((target / 'process.json').read_text())
+        for pid in (record['supervisor_pid'], record['pid']):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        row = fs.get_run_info(run_id)
+        row.update(status='timeout', execution_mode='process', submission_state='unknown',
+                   compute_state='unknown', delivery_state='pending', exit_code=None,
+                   delivery_error='进程停止或文件回收尚未确认', provider='fake',
+                   cache_key=session.cache_key, sandbox_id='sb-old', process_receipt=None)
+        fs._save_manifest()
+        session.job_status = OpenSandboxSession.job_status.__get__(session)
+        monkeypatch.setattr('ai_system.sandbox.factory.create_session', lambda *a, **kw: session)
+        directory = Directory([_view('sb-old', created_at=0, cache_key=session.cache_key)])
+        released = await reclaim.reclaim_project('proj-1', 'paused', directory=directory, settings=settings)
+        assert released == [('sb-old', 'paused')]
+        saved = json.loads(fs._manifest_path.read_text())['runs'][run_id]
+        assert saved['status'] == 'interrupted' and saved['failure_kind'] == 'lost'
+        assert saved['submission_state'] == 'lost' and saved['compute_state'] == 'lost'
+        assert saved['delivery_state'] != 'pending' and not saved.get('delivery_error')
+        assert '消失' in saved['error'] and not saved.get('process_receipt')
+    asyncio.run(check())
+
+
 def test_status_probe_does_not_treat_missing_receipt_as_completed():
     async def check():
         session=object.__new__(OpenSandboxSession)
         for value, expected in [({'submitted':True,'done':None},True),({'submitted':False,'done':None},None),
-            ({'done':{'job_id':'job','exit_code':0}},False)]:
+            ({'done':{'job_id':'job','exit_code':0}},False),
+            ({'submitted':True,'done':None,'alive':True,'lost':False},True),
+            ({'submitted':True,'done':None,'alive':False,'lost':True},False),
+            ({'submitted':True,'done':None,'alive':False},False)]:
             async def rpc(*args): return value
             session._job_rpc=rpc
             assert await session.job_status('job') is expected
