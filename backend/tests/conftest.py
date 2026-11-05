@@ -42,12 +42,14 @@ def isolated_state(tmp_path_factory, monkeypatch):
 @pytest.fixture(autouse=True)
 def no_external_http(monkeypatch):
     import httpx
+    import httpx2
     def blocked(*args, **kwargs):
         raise AssertionError('Offline tests must inject an HTTP transport or sandbox session')
     async def blocked_async(*args, **kwargs):
         blocked()
-    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', blocked)
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, 'handle_async_request', blocked_async)
+    for transport in (httpx,httpx2):
+        monkeypatch.setattr(transport.HTTPTransport, 'handle_request', blocked)
+        monkeypatch.setattr(transport.AsyncHTTPTransport, 'handle_async_request', blocked_async)
 
 
 @pytest.fixture

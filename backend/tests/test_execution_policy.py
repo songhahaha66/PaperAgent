@@ -98,8 +98,8 @@ def test_connection_failure_retains_safe_causes_and_configured_timeout(tmp_path,
     rows=ResearchRuntime(tmp_path).requests()
     assert len(sent)==len(rows)==3
     for row in rows:
-        assert row['diagnostic']=={'error_type':'APIConnectionError',
-            'error_chain':['APIConnectionError','ConnectError','gaierror'],'error_kind':'connection'}
+        assert row['diagnostic']=={'error_type':'OpenAIConnectionError',
+            'error_chain':['OpenAIConnectionError','APIConnectionError','ConnectError','gaierror'],'error_kind':'connection'}
         assert 'fixture-secret-key' not in json.dumps(row)
         assert 'sensitive request detail' not in json.dumps(row)
 
