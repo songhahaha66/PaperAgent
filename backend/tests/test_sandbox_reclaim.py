@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -50,8 +51,10 @@ class Track(RemoteFiles):
 
 
 @pytest.fixture(autouse=True)
-def reset_reclaim_state():
+def reset_reclaim_state(monkeypatch):
     from ai_system.sandbox import reclaim
+    # Alembic logging configuration in migration tests disables existing loggers.
+    monkeypatch.setattr(reclaim.logger, 'disabled', False)
     reclaim._BUSY_KEYS.clear()
     reclaim._BUSY_COUNTS.clear()
     reclaim._RECLAIMING.clear()
@@ -258,7 +261,8 @@ def test_in_process_run_and_live_remote_job_are_not_reclaimed(tmp_path, settings
         _write_runs(runtime, {'run-9': {
             'status': 'running', 'execution_mode': 'process', 'submission_state': 'unknown',
             'compute_state': 'running', 'process_receipt': None, 'phase_started_at': time.time()}})
-        monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: True)
+        monkeypatch.setattr('ai_system.sandbox.factory.create_session', lambda *a, **kw: session)
+        monkeypatch.setattr(reclaim_mod, 'remote_job_running', AsyncMock(return_value=True))
         released = await reclaim_project('proj-1', 'deleted', directory=directory, settings=settings, ttl=900)
         assert released == [] and directory.killed == []
         assert json.loads(runtime.path.read_text())['sandbox_id'] == 'sb-old'
@@ -269,7 +273,7 @@ def test_in_process_run_and_live_remote_job_are_not_reclaimed(tmp_path, settings
 def test_crash_before_submit_is_stale_and_reclaimed(tmp_path, settings):
     runtime, session = _runtime(tmp_path, settings)
     manifest = _write_runs(runtime, {'run-1': {
-        'status': 'starting', 'submission_state': 'not_submitted', 'compute_state': 'not_started',
+        'status': 'starting', 'submission_state': 'not_submitted', 'compute_state': 'not_started', 'delivery_state': 'pending',
         'execution_mode': 'process', 'process_receipt': None}})
     directory = Directory([_view('sb-old', created_at=0, cache_key=session.cache_key)])
 
@@ -299,18 +303,20 @@ def test_crash_after_submit_follows_the_remote_process(tmp_path, settings, monke
     async def reclaim():
         return await reclaim_project('proj-1', 'paused', directory=directory, settings=settings, ttl=900)
 
-    monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: True)
+    monkeypatch.setattr('ai_system.sandbox.factory.create_session', lambda *a, **kw: session)
+    monkeypatch.setattr(reclaim_mod, 'remote_job_running', AsyncMock(return_value=True))
     assert asyncio.run(reclaim()) == []
     assert directory.killed == []
     assert json.loads(manifest.read_text())['runs']['run-2']['status'] == 'running'
 
-    monkeypatch.setattr(reclaim_mod, 'remote_job_running', lambda handle, run_id, row: False)
-    assert asyncio.run(reclaim()) == [('sb-old', 'paused')]
+    monkeypatch.setattr(reclaim_mod, 'remote_job_running', AsyncMock(return_value=False))
+    # Process exit alone is insufficient: these old records lack delivery evidence.
+    assert asyncio.run(reclaim()) == []
     row = json.loads(manifest.read_text())['runs']['run-2']
-    assert row['status'] == 'interrupted'
-    assert row['failure_kind'] == 'transport_unknown'
+    assert row['status'] == 'running'
+    assert row['delivery_state'] == 'pending'
     assert row['submission_state'] == 'unknown'
-    assert json.loads(runtime.path.read_text())['active_run_ids'] == []
+    assert json.loads(runtime.path.read_text())['active_run_ids'] == ['run-2']
 
 
 def test_short_cache_label_matches_a_held_sandbox():

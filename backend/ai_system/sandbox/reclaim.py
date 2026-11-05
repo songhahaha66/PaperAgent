@@ -337,29 +337,130 @@ def _job_submitted(row):
     return False
 
 
-def remote_job_running(handle, run_id, row):
-    """Whether a job left by another backend process is still executing.
-
-    False: it never started, or the remote process is gone. None: this process
-    cannot see the remote process. A live job inside this process is tracked
-    separately and does not use this probe.
-    """
+async def remote_job_running(handle, run_id, row, session):
+    """Unknown is protective; elapsed time is never evidence of process exit."""
     if not _job_submitted(row):
         return False
-    return None
+    if row.get('execution_mode') != 'process':
+        return None
+    try:
+        return await asyncio.wait_for(session.job_status(run_id), 15)
+    except Exception:
+        return None
 
 
-def _record_idle(row, handle, now, ttl):
-    for source in (row, handle or {}):
-        for key in ('phase_started_at', 'updated_at', 'started_at', 'last_job_at'):
-            stamp = source.get(key)
-            if stamp is None:
+def recovery_retention_seconds():
+    try:
+        return max(900, int(os.environ.get('PAPERAGENT_SANDBOX_RECOVERY_TTL_SECONDS', '86400')))
+    except ValueError:
+        return 86400
+
+
+async def _recover_delivery(handle, run_id, session, settings):
+    from .remote_kernel import RemoteKernel
+    kernel = RemoteKernel(handle['workspace'], session, settings)
+    kernel.runtime.handle = {k: v for k, v in handle.items() if k != '_path'}
+    kernel._started = True  # Attach to this identity; never create or replay a job.
+    kernel.pending_run = run_id
+    await kernel._retry_outputs_locked(renew=False)
+
+
+async def _manifest_busy(handle, *, now, ttl, settings):
+    """Called with the cross-process execution lock held, including recovery."""
+    inspected_at = time.monotonic()
+    initial_now = now
+    path = _manifest_path(handle)
+    if path is None or not path.is_file():
+        return bool(handle.get('active_run_ids'))
+    try:
+        data = json.loads(path.read_text())
+        runs = data['runs']
+        if not isinstance(runs, dict):
+            return True
+    except (OSError, ValueError, KeyError):
+        return True
+    session = None
+    try:
+        for run_id, row in runs.items():
+            now = initial_now + (time.monotonic() - inspected_at)
+            if not isinstance(row, dict):
+                return True
+            if run_id in data.get('inherited_runs', []):
                 continue
+            if row.get('sandbox_id') and row['sandbox_id'] != handle.get('sandbox_id'):
+                continue
+            if row.get('cache_key') and row['cache_key'] != handle.get('cache_key'):
+                continue
+            submitted = _job_submitted(row)
+            if row.get('submission_state') == 'not_submitted' and not row.get('process_receipt'):
+                _mark_stale(row, submitted=False)
+                row.update(delivery_state='not_started', delivery_error=None)
+                _write_json(path, data)
+                continue
+            pending = (row.get('delivery_state') == 'pending' or row.get('delivery_error') or
+                       row.get('finalize_pending'))
+            if row.get('delivery_state') == 'available' and not pending:
+                continue
+            if not submitted and not pending:
+                if row.get('status') in {'starting', 'running', 'created'}:
+                    _mark_stale(row, submitted=False)
+                    _write_json(path, data)
+                continue
+            # A receipt is not a delivery acknowledgement. Legacy completed rows
+            # without pending markers need no recovery.
+            if row.get('submission_state') == 'acknowledged' and not pending:
+                continue
+            deadline = row.get('recovery_deadline')
+            if deadline is not None and now >= deadline:
+                return True
+            attempt_started = time.monotonic()
             try:
-                return now - float(stamp) >= float(ttl)
-            except (TypeError, ValueError):
-                continue
-    return True
+                if session is None:
+                    from .factory import create_session
+                    session = create_session(handle['workspace'], settings=settings,
+                        work_id=handle.get('work_id'), experiment_id='research', cache_key=handle['cache_key'])
+                    # Status/transfer RPCs also run commands with sustain loops.
+                    # Disable implicit renewal for the entire sweeper session.
+                    session.automatic_renewal = False
+                    await asyncio.wait_for(session.attach_for_destroy(handle), 15)
+                alive = await remote_job_running(handle, run_id, row, session)
+                if alive is not False:
+                    return True
+                remaining = 90 if deadline is None else deadline - now - (time.monotonic() - attempt_started)
+                if remaining <= 0:
+                    return True
+                await asyncio.wait_for(_recover_delivery(handle, run_id, session, settings), min(90, remaining))
+                data = json.loads(path.read_text())
+            except Exception as exc:
+                logger.warning('沙箱结果恢复未完成 run_id=%s error=%s', run_id, type(exc).__name__)
+                # Recovery may have committed a receipt before failing delivery.
+                # Reload so this error cannot overwrite that progress.
+                data = json.loads(path.read_text())
+                current = data['runs'][run_id]
+                attempted_at = now + (time.monotonic() - attempt_started)
+                current.setdefault('recovery_started_at', attempted_at)
+                current.setdefault('recovery_deadline', attempted_at + recovery_retention_seconds())
+                current.update(delivery_state='pending', recovery_attempted_at=attempted_at,
+                               delivery_error='结果恢复未完成：' + type(exc).__name__)
+                _write_json(path, data)
+                # Bound extra retention without declaring failed delivery complete.
+                # After the deadline, leave evidence intact and allow server TTL
+                # expiry; never forcibly kill a job whose status is uncertain.
+                if session is not None and attempted_at < current['recovery_deadline']:
+                    try:
+                        remaining = current['recovery_deadline'] - attempted_at
+                        if remaining >= 1:
+                            await asyncio.wait_for(session.renew(min(settings.max_timeout, int(remaining))), min(15, remaining))
+                    except Exception:
+                        pass
+                return True
+        return False
+    finally:
+        if session is not None:
+            try:
+                await asyncio.wait_for(session.disconnect(), 5)
+            except Exception:
+                pass
 
 
 def _mark_stale(row, *, submitted):
@@ -387,55 +488,6 @@ def _write_json(path, data):
     payload = {key: value for key, value in data.items() if key != '_path'}
     atomic_write(Path(path), lambda stream: stream.write(json.dumps(payload).encode()))
 
-
-def _manifest_busy(handle, *, now, ttl):
-    """True when a job this process does not own must keep the sandbox.
-
-    A previous process's ``starting`` / ``not_submitted`` row is not a running
-    job. A submitted job protects the sandbox only while its remote process is
-    still running, or until the idle limit when that cannot be seen. Stale rows
-    are marked interrupted so later sweeps do not treat them as live.
-    """
-    manifest_path = _manifest_path(handle)
-    if manifest_path is None or not manifest_path.is_file():
-        return False
-    try:
-        data = json.loads(manifest_path.read_text())
-    except (OSError, ValueError):
-        return True
-    runs = data.get('runs') or {}
-    busy = False
-    changed = False
-    stale_ids = []
-    for run_id, row in runs.items():
-        if not isinstance(row, dict):
-            continue
-        if row.get('process_receipt') or row.get('submission_state') == 'acknowledged':
-            continue
-        if row.get('status') in {'interrupted', 'error', 'success', 'cancelled', 'timeout'}:
-            continue
-        if run_id in _ACTIVE_RUNS:
-            busy = True
-            continue
-        submitted = _job_submitted(row)
-        alive = remote_job_running(handle, run_id, row)
-        if alive is True:
-            busy = True
-            continue
-        if submitted and alive is None and not _record_idle(row, handle, now, ttl):
-            busy = True
-            continue
-        _mark_stale(row, submitted=submitted)
-        stale_ids.append(run_id)
-        changed = True
-    if changed:
-        _write_json(manifest_path, data)
-    if stale_ids and handle.get('_path'):
-        ids = [run_id for run_id in (handle.get('active_run_ids') or []) if run_id not in stale_ids]
-        if ids != list(handle.get('active_run_ids') or []):
-            handle['active_run_ids'] = ids
-            _write_json(handle['_path'], handle)
-    return busy
 
 
 def _live_locked(sandbox_id, cache_key):
@@ -466,8 +518,6 @@ def _protected(view, handle, *, now, ttl):
     if any(run_id in _ACTIVE_RUNS for run_id in (handle.get('active_run_ids') or [])):
         return True
     if _live_locked(view.id, handle.get('cache_key') or (view.metadata or {}).get('cache_key')):
-        return True
-    if _manifest_busy(handle, now=now, ttl=ttl):
         return True
     return False
 
@@ -598,6 +648,7 @@ async def _destroy(view, handle, directory, settings):
             if getattr(getattr(kernel, 'session', None), 'id', None) == view.id]
     try:
         if live:
+            live[0].runtime.handle = json.loads(Path(handle['_path']).read_text()) if handle.get('_path') else handle
             await live[0].runtime.destroy()
             for kernel in live:
                 mark = getattr(kernel, '_mark_reclaimed', None)
@@ -646,7 +697,35 @@ def _candidates(remote, activity, *, work_id=None):
     return list(chosen.values())
 
 
-async def _release(view, reason, *, activity, directory, settings, immediate, now, ttl):
+async def _release(view, reason, *, activity, directory, settings, immediate, now, ttl, projects):
+    from services.file_services.workspace_lock import try_execution_lock
+    handle = activity.get(view.id) or {}
+    workspace = handle.get('workspace')
+    if not workspace:
+        work_id = (view.metadata or {}).get('work_id')
+        if work_id:
+            from config.paths import get_workspace_path
+            workspace = get_workspace_path(work_id)
+    if not workspace:
+        # Unowned remote orphans have no local execution identity to lock.
+        return await _release_locked(view, reason, activity=activity, directory=directory,
+            settings=settings, immediate=immediate, now=now, ttl=ttl)
+    with try_execution_lock(workspace) as acquired:
+        if not acquired:
+            return False
+        fresh = load_activity()
+        if handle and view.id not in fresh:
+            return False
+        handle = fresh.get(view.id) or {}
+        # A run may have completed since the listing; use its updated idle clock.
+        reason = decide(view, projects=projects, activity=handle, now=now, ttl=ttl)
+        if reason is None:
+            return False
+        return await _release_locked(view, reason, activity=fresh, directory=directory,
+            settings=settings, immediate=immediate, now=now, ttl=ttl)
+
+
+async def _release_locked(view, reason, *, activity, directory, settings, immediate, now, ttl):
     handle = activity.get(view.id) or {}
     if not _begin(view, handle, now=now, ttl=ttl):
         _skip(view, handle, reason, immediate=immediate)
@@ -656,6 +735,8 @@ async def _release(view, reason, *, activity, directory, settings, immediate, no
             protected = _protected(view, handle, now=now, ttl=ttl)
         if protected:
             _skip(view, handle, reason, immediate=immediate)
+            return False
+        if await _manifest_busy(handle, now=now, ttl=ttl, settings=settings):
             return False
         if not await _destroy(view, handle, directory, settings):
             return False
@@ -675,19 +756,21 @@ async def reclaim_recorded(*, directory, projects, now=None, ttl=None, settings=
     """Delete every selected sandbox. Returns ``(sandbox_id, reason)`` pairs."""
     now = time.time() if now is None else now
     ttl = idle_ttl_seconds() if ttl is None else ttl
+    sweep_started = time.monotonic()
     activity = load_activity()
     remote = await directory.list_sandboxes() if directory is not None else []
     released = []
     immediate = force_reason in IMMEDIATE_REASONS
     for view in _candidates(remote, activity, work_id=work_id):
+        candidate_now = now + (time.monotonic() - sweep_started)
         handle = activity.get(view.id) or {}
         reason = force_reason if force_reason in {'paused', 'completed'} and (handle.get('role') or (view.metadata or {}).get('role') or 'research') != 'run' else None
         if reason is None:
-            reason = decide(view, projects=projects, activity=handle, now=now, ttl=ttl)
+            reason = decide(view, projects=projects, activity=handle, now=candidate_now, ttl=ttl)
         if reason is None:
             continue
         if await _release(view, reason, activity=activity, directory=directory, settings=settings,
-                          immediate=immediate or reason in IMMEDIATE_REASONS, now=now, ttl=ttl):
+                          immediate=immediate or reason in IMMEDIATE_REASONS, now=candidate_now, ttl=ttl, projects=projects):
             released.append((view.id, reason))
     return released
 

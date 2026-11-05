@@ -56,6 +56,7 @@ class AITask:
     json_blocks: list = field(default_factory=list)
     # asyncio任务引用
     _async_task: Optional[asyncio.Task] = None
+    _ownership: Any = field(default=None, repr=False)
 
 
 class TaskManager:
@@ -80,13 +81,21 @@ class TaskManager:
         self._completed_retention = 60  # 1分钟
         logger.info("TaskManager 初始化完成")
     
-    def create_task(self, work_id: str, user_id: int, message: str, action: str = "run") -> AITask:
+    def create_task(self, work_id: str, user_id: int, message: str, action: str = "run", *, workspace=None) -> AITask:
         """创建新任务"""
         # Atomic reservation on the event loop, before any asynchronous setup.
         # A cancelled task still owns the workspace while it saves final output.
         if self.get_active_task(work_id):
             raise ValueError('当前有任务正在执行，请等待完成')
         
+        from config.paths import get_workspace_path
+        from .coordinator import claim
+        previous = self._tasks.get(work_id)
+        if previous and (previous._async_task is None or previous._async_task.done()):
+            self._release_ownership(previous)
+        ownership = claim(workspace if workspace is not None else get_workspace_path(work_id))
+        if ownership is None:
+            raise ValueError('当前有任务正在其他后端执行，请等待完成')
         task_id = f"{work_id}_{uuid4().hex}"
         task = AITask(
             task_id=task_id,
@@ -94,11 +103,22 @@ class TaskManager:
             user_id=user_id,
             message=message,
             action=action,
+            _ownership=ownership,
         )
         self._tasks[work_id] = task
         logger.info(f"创建任务: {task_id}, work_id: {work_id}")
         return task
     
+    @staticmethod
+    def _release_ownership(task):
+        if task._ownership is not None:
+            task._ownership.close()
+            task._ownership = None
+
+    def _release_if_finished(self, task):
+        if task._async_task is None or task._async_task.done():
+            self._release_ownership(task)
+
     def get_task(self, work_id: str) -> Optional[AITask]:
         """获取任务"""
         return self._tasks.get(work_id)
@@ -160,6 +180,7 @@ class TaskManager:
         if task:
             task.status = TaskStatus.COMPLETED
             task.completed_at = time.time()
+            self._release_if_finished(task)
             logger.info(f"任务完成: {task.task_id}")
             # 启动清理定时器
             asyncio.create_task(self._cleanup_completed_task(work_id, task.task_id))
@@ -170,6 +191,7 @@ class TaskManager:
         if task:
             task.status = TaskStatus.FAILED
             task.completed_at = time.time()
+            self._release_if_finished(task)
             task.error = error
             if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
@@ -183,6 +205,7 @@ class TaskManager:
             task.cancel_reason = reason
             task.status = TaskStatus.CANCELLED
             task.completed_at = time.time()
+            self._release_if_finished(task)
             if task._async_task and not task._async_task.done() and task._async_task is not asyncio.current_task():
                 task._async_task.cancel()
             logger.info(f"任务取消: {task.task_id}")
@@ -193,6 +216,9 @@ class TaskManager:
         task = self._tasks.get(work_id)
         if task:
             task._async_task = async_task
+            # Capture this exact task: an older completion must not release a
+            # newer owner's lock. Cancellation retains ownership through cleanup.
+            async_task.add_done_callback(lambda completed: self._release_ownership(task))
     
     def get_outputs_after(self, work_id: str, seq: int = 0) -> list[TaskOutput]:
         """序号大于 seq 的输出（断线重连时从断点续传）"""
@@ -233,6 +259,7 @@ class TaskManager:
         await asyncio.sleep(self._completed_retention)
         task = self._tasks.get(work_id)
         if task and task.task_id == task_id and not self.get_active_task(work_id) and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED):
+            self._release_if_finished(task)
             del self._tasks[work_id]
             logger.info(f"清理已完成任务: {task.task_id}")
 
