@@ -29,6 +29,9 @@
   --pa-radius-pill: 999px;
   --pa-radius-circle: 50%;
   --pa-control-height-sm: 28px;
+  --pa-control-height-icon: 32px;
+  --pa-radius-action: 10px;
+  --pa-icon-size: 18px;
   --pa-control-height-md: 36px;
   --pa-control-height-lg: 40px;
   --pa-document-paper: #fff;

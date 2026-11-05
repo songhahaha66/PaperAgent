@@ -122,6 +122,74 @@ summary::-webkit-details-marker {
   border-radius: var(--pa-radius-control);
 }
 
+/* Shared icon actions: quiet tools, with a single accented composer action. */
+.pa-icon-button,
+.t-button.pa-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--pa-control-height-icon);
+  min-width: var(--pa-control-height-icon);
+  height: var(--pa-control-height-icon);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--pa-radius-control);
+  background: transparent;
+  color: var(--pa-muted);
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+.pa-icon-button .t-icon {
+  width: var(--pa-icon-size);
+  height: var(--pa-icon-size);
+  font-size: var(--pa-icon-size);
+  flex-shrink: 0;
+}
+.pa-icon-button .t-button__text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.pa-icon-button:not(:disabled):not(.t-is-disabled):hover {
+  background: var(--pa-surface-hover);
+  color: var(--pa-ink);
+}
+.pa-icon-button:not(:disabled):not(.t-is-disabled):active {
+  background: var(--pa-surface-active);
+}
+.t-button.pa-icon-button.pa-send-button {
+  border-radius: var(--pa-radius-action);
+  background: var(--pa-accent);
+  color: var(--pa-on-accent);
+}
+.pa-send-button .t-icon {
+  width: 20px;
+  height: 20px;
+  font-size: 20px;
+}
+.pa-send-button:not(:disabled):not(.t-is-disabled):hover {
+  background: var(--pa-accent-hover);
+  color: var(--pa-on-accent);
+}
+.pa-send-button:not(:disabled):not(.t-is-disabled):active {
+  background: var(--pa-accent-active);
+}
+.pa-icon-button:disabled,
+.pa-icon-button.t-is-disabled {
+  color: var(--pa-disabled);
+  cursor: not-allowed;
+}
+.t-button.pa-send-button:disabled,
+.t-button.pa-send-button.t-is-disabled {
+  background: var(--pa-surface-hover);
+  color: var(--pa-disabled);
+  border-color: transparent;
+}
+
 @media (max-width: 768px) {
   .home-page,
   .models-page,
@@ -139,10 +207,10 @@ summary::-webkit-details-marker {
   }
 }
 
-/* Positive status badges use the same solid accent as primary actions. */
+/* Status is quieter than an actionable primary button. */
 .t-tag--success.t-tag--light {
-  background: var(--td-brand-color);
-  color: var(--pa-on-accent);
+  background: var(--pa-accent-soft);
+  color: var(--pa-accent);
 }
 
 /* Syntax highlighting follows the active palette instead of importing a light-only theme. */

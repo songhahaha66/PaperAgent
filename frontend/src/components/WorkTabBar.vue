@@ -37,7 +37,7 @@
         </button>
         <button
           v-if="panel.kind !== 'chat'"
-          class="work-tab-close"
+          class="work-tab-close pa-icon-button"
           :aria-label="`${isZh ? '关闭' : 'Close'} ${panel.label}`"
           tabindex="-1"
           @click="$emit('close', panel.id)"
@@ -48,7 +48,7 @@
     </div>
     <t-dropdown :options="options" trigger="click" placement="bottom-left">
       <button
-        class="add-panel"
+        class="add-panel pa-icon-button"
         :aria-label="isZh ? '打开面板' : 'Open panel'"
         :title="isZh ? '打开面板' : 'Open panel'"
         aria-haspopup="menu"
@@ -188,33 +188,11 @@ async function handleKey(event: KeyboardEvent, index: number) {
 .work-tab:not(.active):hover {
   background: var(--pa-surface-hover);
 }
-.work-tab-close,
-.add-panel {
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-  width: var(--pa-control-height-sm);
-  height: var(--pa-control-height-sm);
-  border: 0;
-  border-radius: var(--pa-radius-inline);
-  background: transparent;
-  color: var(--pa-muted);
-  cursor: pointer;
-  font-size: 15px;
-}
 .work-tab-close {
   margin-right: 6px;
 }
-.work-tab-close:hover,
-.add-panel:hover {
-  background: var(--pa-surface-hover);
-  color: var(--pa-ink);
-}
 .add-panel {
   margin: 0 0 6px;
-  width: 32px;
-  height: 32px;
-  font-size: 17px;
 }
 @media (max-width: 768px) {
   .work-tab-bar {

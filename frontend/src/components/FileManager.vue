@@ -17,7 +17,7 @@
         aria-label="刷新文件"
         @click.stop="handleRefresh"
         :loading="isLoading"
-        class="fm-btn"
+        class="fm-btn pa-icon-button"
       >
         <template #icon>
           <t-icon name="refresh" size="16px" />
@@ -449,8 +449,6 @@ defineExpose({
 
 .fm-btn {
   flex-shrink: 0;
-  width: var(--pa-control-height-md);
-  height: var(--pa-control-height-md);
   align-self: center;
 }
 

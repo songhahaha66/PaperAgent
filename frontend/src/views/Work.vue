@@ -26,7 +26,10 @@
         </div>
       </section>
     </main>
-    <main v-else-if="currentWork && currentWork.architecture_version !== 2" class="workspace-container">
+    <main
+      v-else-if="currentWork && currentWork.architecture_version !== 2"
+      class="workspace-container"
+    >
       <section class="work-load-error">
         <h1>{{ currentWork.title || '历史项目' }}</h1>
         <p>此项目使用旧版工作区，仅支持导出资料、源码、论文、成果和可读研究记录。</p>
@@ -89,7 +92,12 @@
             {{ primaryAction.label }}
           </t-button>
           <t-dropdown :options="workActionOptions" trigger="click"
-            ><t-button theme="default" variant="outline" shape="square" :aria-label="ui.more"
+            ><t-button
+              theme="default"
+              variant="text"
+              shape="square"
+              class="pa-icon-button"
+              :aria-label="ui.more"
               ><t-icon name="more" /></t-button
           ></t-dropdown>
         </div>
@@ -171,7 +179,8 @@
                     <t-button
                       theme="default"
                       variant="text"
-                      shape="circle"
+                      shape="square"
+                      class="pa-icon-button"
                       :disabled="isStreaming || loading"
                       :aria-label="isZh ? '添加附件' : 'Add attachment'"
                       @click="chatFileInput?.click()"
@@ -180,7 +189,8 @@
                     <t-button
                       type="submit"
                       theme="primary"
-                      shape="circle"
+                      shape="square"
+                      class="pa-icon-button pa-send-button"
                       :disabled="isStreaming || loading || !inputValue.trim()"
                       :aria-label="isZh ? '发送消息' : 'Send message'"
                       ><template #icon><t-icon name="arrow-up" /></template
@@ -205,8 +215,7 @@
                     title="会话平均 TPS：全部已完成请求的输出 token / 累计请求耗时，包含等待与推理时间"
                     >TPS {{ modelUsage?.tps?.toFixed(1) ?? '—' }}</span
                   >
-                  <span
-                    :title="cacheUsageTitle"
+                  <span :title="cacheUsageTitle"
                     >缓存
                     {{
                       modelUsage?.cache_hit_rate == null
@@ -340,13 +349,7 @@ const authStore = useAuthStore(),
 // The keyed route gives each work its own lifetime, including in-flight requests.
 const workId = ref(route.params.work_id as string)
 const session = useWorkSession(workId)
-const {
-  currentWork,
-  loading,
-  loadError,
-  loadErrorText,
-  researchSnapshot,
-} = session
+const { currentWork, loading, loadError, loadErrorText, researchSnapshot } = session
 const layout = useWorkLayout(workId, researchSnapshot)
 const {
   panelStore,
@@ -392,12 +395,27 @@ watch(figureFiles, layout.restorePanelScroll, { flush: 'post' })
 const issueRequest = ref<{ id: string; at: number } | null>(null)
 const modelUsage = computed(() => researchSnapshot.value?.runtime?.usage)
 const cacheUsageTitle = computed(() => {
-  const scopes: Record<string, string> = { research: '主研究', summary: '摘要', delegate: '子任务', other: '其他' }
-  const phases: Record<string, string> = { cold: '首次请求', after_compaction: '压缩后首请求', stable: '连续追加', prefix_reset: '前缀变更', unclassified: '未分阶段' }
+  const scopes: Record<string, string> = {
+    research: '主研究',
+    summary: '摘要',
+    delegate: '子任务',
+    other: '其他',
+  }
+  const phases: Record<string, string> = {
+    cold: '首次请求',
+    after_compaction: '压缩后首请求',
+    stable: '连续追加',
+    prefix_reset: '前缀变更',
+    unclassified: '未分阶段',
+  }
   const rows = modelUsage.value?.cache_breakdown ?? []
-  return ['缓存仅统计服务商返回计数的请求；未命中为这部分请求的输入减缓存读取。', ...rows.map(row =>
-    `${scopes[row.scope] ?? row.scope} · ${phases[row.phase] ?? row.phase}：${row.cache_hit_rate == null ? '暂无缓存计数' : (row.cache_hit_rate * 100).toFixed(1) + '%'}，未命中 ${row.cache_miss_tokens?.toLocaleString() ?? '—'} tokens，${row.cache_reported_requests}/${row.requests} 次有缓存计数，累计请求 ${row.request_seconds.toFixed(1)} 秒`
-  )].join('\n')
+  return [
+    '缓存仅统计服务商返回计数的请求；未命中为这部分请求的输入减缓存读取。',
+    ...rows.map(
+      (row) =>
+        `${scopes[row.scope] ?? row.scope} · ${phases[row.phase] ?? row.phase}：${row.cache_hit_rate == null ? '暂无缓存计数' : (row.cache_hit_rate * 100).toFixed(1) + '%'}，未命中 ${row.cache_miss_tokens?.toLocaleString() ?? '—'} tokens，${row.cache_reported_requests}/${row.requests} 次有缓存计数，累计请求 ${row.request_seconds.toFixed(1)} 秒`,
+    ),
+  ].join('\n')
 })
 
 const formatTokens = (value?: number | null) => {
@@ -438,9 +456,18 @@ function openLiteratureEvidence(event: Event) {
 async function refreshPaper() {
   await stream.refreshResources(['research', 'files'])
 }
-const stream = useWorkStream({ session, layout, refreshFiles: artifacts.loadWorkspaceFiles,
+const stream = useWorkStream({
+  session,
+  layout,
+  refreshFiles: artifacts.loadWorkspaceFiles,
   onMessageRejected: (_message, context) => {
-    if (context) paperContexts.value = context.references.map(reference => ({...reference, work_id: workId.value, research_id: context.research_id, thread_id: context.thread_id}))
+    if (context)
+      paperContexts.value = context.references.map((reference) => ({
+        ...reference,
+        work_id: workId.value,
+        research_id: context.research_id,
+        thread_id: context.thread_id,
+      }))
   },
 })
 const {
@@ -482,13 +509,19 @@ async function attachPaperQuote(context: PaperComposerContext) {
 async function sendMessage(...args: Parameters<typeof streamSendMessage>) {
   if (args.length || !paperContexts.value.length) return streamSendMessage(...args)
   if (isStreaming.value || loading.value || !inputValue.value.trim()) return false
-  const contexts = [...paperContexts.value], context = contexts[0]!
+  const contexts = [...paperContexts.value],
+    context = contexts[0]!
   const sent = await streamSendMessage(undefined, 'auto', undefined, {
     research_id: context.research_id,
-    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({ selection, read_quote, read_version, quote })),
+    references: contexts.map(({ selection, read_quote, read_version, quote }) => ({
+      selection,
+      read_quote,
+      read_version,
+      quote,
+    })),
     thread_id: contexts.length === 1 ? context.thread_id : null,
   })
-  if (sent) paperContexts.value = paperContexts.value.filter(item => !contexts.includes(item))
+  if (sent) paperContexts.value = paperContexts.value.filter((item) => !contexts.includes(item))
   return sent
 }
 const { chatFileInput, handleAttachmentChange } = useWorkAttachments({
@@ -507,9 +540,11 @@ async function replyToResearch() {
 const primaryAction = computed(() => {
   if (!currentWork.value) return null
   if (isStreaming.value) {
-    const label =
-      ['auto', 'ask', 'clarify'].includes(runningAction.value)
-        ? (isZh.value ? '停止回复' : 'Stop reply') : ui.value.pause
+    const label = ['auto', 'ask', 'clarify'].includes(runningAction.value)
+      ? isZh.value
+        ? '停止回复'
+        : 'Stop reply'
+      : ui.value.pause
     return { kind: 'pause', icon: 'pause', label, title: label } as const
   }
   if (currentWork.value.status === 'waiting') {
@@ -728,14 +763,10 @@ onUnmounted(() => {
   gap: 10px;
   flex-shrink: 0;
 }
-.work-actions .t-button {
+.work-actions .t-button:not(.pa-icon-button) {
   height: var(--pa-control-height-md);
   font-size: 13px;
   border-radius: var(--pa-radius-control);
-}
-.work-actions .t-button--shape-square {
-  width: 32px;
-  border-color: var(--pa-line);
 }
 .workspace-trigger {
   display: inline-flex;
@@ -847,6 +878,7 @@ onUnmounted(() => {
 }
 .work-composer:focus-within {
   border-color: var(--pa-line-strong);
+  box-shadow: var(--pa-focus-ring);
 }
 .work-message-input {
   flex: 1;
@@ -870,11 +902,6 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-}
-.composer-controls .t-button {
-  width: var(--pa-control-height-md);
-  height: var(--pa-control-height-md);
-  min-width: var(--pa-control-height-md);
 }
 .jump-latest {
   position: absolute;
@@ -1028,7 +1055,6 @@ onUnmounted(() => {
     gap: 14px;
   }
 }
-
 </style>
 
 <style scoped>
