@@ -6,6 +6,11 @@ A streamed response is not replayed after any public/tool/reasoning content is e
 import asyncio
 import time
 import httpx
+import httpx2
+from openai import APIConnectionError as OpenAIConnectionError, APITimeoutError as OpenAITimeoutError
+from anthropic import APIConnectionError as AnthropicConnectionError, APITimeoutError as AnthropicTimeoutError
+from google.genai.errors import APIError as GoogleAPIError
+from langchain_google_genai.chat_models import ChatGoogleGenerativeAIError
 from pydantic import model_validator
 from urllib.parse import urlparse
 from ..research.runtime import ACTIVE_BUDGET, ACTIVE_MODEL_REQUEST, ModelServiceError,ResearchBudgetExhausted
@@ -32,9 +37,12 @@ def operation_key(runtime,model,args,kwargs):
 
 
 def failure(exc):
-    status=getattr(exc,'status_code',None) or getattr(getattr(exc,'response',None),'status_code',None)
-    if status is None and isinstance(getattr(exc,'code',None),int):status=exc.code
-    body=getattr(exc,'body',None) or {}
+    # Google wrappers retain structured status/body only on the SDK cause.
+    # Unwrap this known boundary, never unrelated exception context or messages.
+    provider=exc.__cause__ if isinstance(exc,ChatGoogleGenerativeAIError) and isinstance(exc.__cause__,GoogleAPIError) else exc
+    status=getattr(provider,'status_code',None) or getattr(getattr(provider,'response',None),'status_code',None)
+    if status is None and isinstance(getattr(provider,'code',None),int):status=provider.code
+    body=getattr(provider,'body',None) or (provider.details if isinstance(provider,GoogleAPIError) else {})
     if isinstance(body,dict) and isinstance(body.get('error'),dict):body=body['error']
     code=str(body.get('code') or body.get('type') or '') if isinstance(body,dict) else ''
     quota=code.lower() in {'insufficient_quota','insufficient_balance','balance_not_enough','billing_hard_limit_reached','credit_balance_too_low'}
@@ -47,9 +55,14 @@ def failure(exc):
     if status in {400,413} and (code.lower() in {'context_length_exceeded','max_context_length_exceeded','context_window_exceeded'}
             or isinstance(body,dict) and str(body.get('message','')).lower().startswith('prompt is too long:')):
         return 'context_limit','模型拒绝超出上下文容量的请求；可压缩后重发一次。',False,False
-    if isinstance(exc, httpx.NetworkError) or type(exc).__name__ == 'APIConnectionError':
+    # LangChain wraps SDK errors in subclasses with provider-specific names.
+    # Timeouts inherit APIConnectionError in both SDKs, so classify them first.
+    timeout=isinstance(exc,(TimeoutError,httpx.TimeoutException,httpx2.TimeoutException,OpenAITimeoutError,AnthropicTimeoutError))
+    if timeout:
+        return 'timeout','模型服务暂时不可用，已保存状态；有限重试后可检查连接和输入。',True,False
+    if isinstance(exc,(httpx.NetworkError,httpx2.NetworkError,OpenAIConnectionError,AnthropicConnectionError)):
         return 'connection','连接模型服务失败，请检查网络；已有进度已保存。',True,False
-    transient=status in {408,429} or isinstance(status,int) and status>=500 or isinstance(exc,(TimeoutError,ConnectionError,httpx.TransportError)) or type(exc).__name__ in {'APITimeoutError','APIConnectionError','ReadTimeout','ConnectTimeout','RateLimitError'}
+    transient=status in {408,429} or isinstance(status,int) and status>=500 or isinstance(exc,(ConnectionError,httpx.TransportError,httpx2.TransportError)) or type(exc).__name__ == 'RateLimitError'
     return ('rate_limit' if status==429 else 'timeout' if isinstance(exc,TimeoutError) or 'Timeout' in type(exc).__name__ else 'service_error',
             '模型服务暂时不可用，已保存状态；有限重试后可检查连接和输入。' if transient else '模型请求失败，已保留状态；请检查连接或请求内容。',bool(transient),False)
 

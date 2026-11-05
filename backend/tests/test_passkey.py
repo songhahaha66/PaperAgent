@@ -240,3 +240,39 @@ def test_cannot_delete_another_users_passkey():
     assert deleted.status_code == 200
     listed = client.get("/auth/passkey/credentials", headers=_auth_headers(owner_token))
     assert listed.json() == []
+
+
+def test_real_registration_rejects_non_string_attestation_format():
+    """Malformed CBOR must fail closed through the real WebAuthn verifier."""
+    import hashlib
+    import json
+    import cbor2
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    token = _register_and_login('passkey-real@example.com', 'passkey_real')
+    headers = _auth_headers(token)
+    public = ec.generate_private_key(ec.SECP256R1()).public_key().public_numbers()
+    key = cbor2.dumps({1: 2, 3: -7, -1: 1,
+                       -2: public.x.to_bytes(32, 'big'), -3: public.y.to_bytes(32, 'big')})
+    for fmt in ([], {}, 7, 'none'):
+        options = client.post('/auth/passkey/register/options', headers=headers).json()
+        credential_id = b'controlled-real-credential'
+        auth_data = (hashlib.sha256(options['options']['rp']['id'].encode()).digest()
+                     + b'\x45' + b'\x00' * 4 + b'\x00' * 16
+                     + len(credential_id).to_bytes(2, 'big') + credential_id + key)
+        credential = {
+            'id': bytes_to_base64url(credential_id),
+            'rawId': bytes_to_base64url(credential_id),
+            'type': 'public-key',
+            'response': {
+                'clientDataJSON': bytes_to_base64url(json.dumps({
+                    'type': 'webauthn.create', 'challenge': options['options']['challenge'],
+                    'origin': ORIGIN}).encode()),
+                'attestationObject': bytes_to_base64url(cbor2.dumps({
+                    'fmt': fmt, 'authData': auth_data, 'attStmt': {}})),
+            },
+        }
+        response = client.post('/auth/passkey/register/verify', headers=headers,
+                               json={'challenge_id': options['challenge_id'], 'credential': credential})
+        assert response.status_code == (200 if fmt == 'none' else 400), response.text
+        assert len(client.get('/auth/passkey/credentials', headers=headers).json()) == (1 if fmt == 'none' else 0)
