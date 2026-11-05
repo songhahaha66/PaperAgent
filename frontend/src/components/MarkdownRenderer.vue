@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
 import MarkdownIt from 'markdown-it'
-import mila from 'markdown-it-katex'
+import { katex } from '@mdit/plugin-katex'
 import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
 import { useAuthStore } from '@/stores/auth'
@@ -69,7 +69,7 @@ const md = new MarkdownIt({
   linkify: true,
   breaks: true,
 })
-md.use(mila)
+md.use(katex, { trust: false, throwOnError: false })
 
 // 渲染后的 HTML
 const renderedContent = computed(() => {

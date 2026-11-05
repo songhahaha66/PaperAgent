@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0"
+    "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "dev": "vite",
@@ -14,7 +14,7 @@
     "type-check": "vue-tsc --build",
     "format": "prettier --write src/",
     "test:history": "node --experimental-vm-modules tests/workHistory.test.cjs",
-    "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs",
+    "test:preview": "node --experimental-vm-modules tests/workPreview.test.cjs && node --experimental-vm-modules tests/markdownRenderer.test.cjs",
     "test:panels": "node --experimental-vm-modules tests/workPanels.test.cjs && node --experimental-vm-modules tests/workPaneLayout.test.cjs && node --experimental-vm-modules tests/workInteractions.test.cjs && node --experimental-vm-modules tests/workObjects.test.cjs",
     "test:workspace": "node --experimental-vm-modules tests/workspaceRefresh.test.cjs && npm run test:panels && npm run test:preview && npm run test:history && npm run test:research && npm run test:resources && npm run test:home && npm run test:messages && npm run test:paper",
     "test:paper": "node --experimental-vm-modules tests/paperReader.test.cjs && node --experimental-vm-modules tests/paperAnnotations.test.cjs && node --experimental-vm-modules tests/paperComposer.test.cjs",
@@ -24,13 +24,13 @@
     "test:messages": "node --experimental-vm-modules tests/jsonChatRenderer.test.cjs && node --experimental-vm-modules tests/conversationTimeline.test.cjs && node --experimental-vm-modules tests/conversationExecution.test.cjs && node --experimental-vm-modules tests/conversationStream.test.cjs && node --experimental-vm-modules tests/workSocket.test.cjs"
   },
   "dependencies": {
+    "@mdit/plugin-katex": "^1.1.5",
     "@simplewebauthn/browser": "^14.0.0",
     "docx-preview": "^0.4.1",
     "dompurify": "^3.4.17",
     "highlight.js": "^11.12.0",
     "katex": "^0.19.1",
     "markdown-it": "^15.0.3",
-    "markdown-it-katex": "^2.0.3",
     "pdfjs-dist": "^6.4.299",
     "pinia": "^4.1.0",
     "pinia-plugin-persistedstate": "^4.7.1",
@@ -48,14 +48,9 @@
     "@vue/tsconfig": "^0.9.1",
     "npm-run-all2": "^9.0.4",
     "prettier": "3.9.10",
-    "typescript": "~7.0.2",
+    "typescript": "~6.0.3",
     "vite": "^8.3.5",
     "vite-plugin-vue-devtools": "^8.2.1",
     "vue-tsc": "^3.3.14"
-  },
-  "overrides": {
-    "markdown-it-katex": {
-      "katex": "^0.16.0"
-    }
   }
 }
