@@ -106,3 +106,48 @@ User-run acceptance on the actual server, not run by the implementer:
 4. Repeat compilation with both an uploaded Word template and a default reference. Verify a failed output download is retried from its completed receipt, source edits during compilation preserve the old PDF, and build dependencies do not change the source version.
 5. Stop the sandbox service and verify already delivered backend files still preview/download/export. Alter a formal presentation copy and confirm the archive remains authoritative. Try unsafe paths/symlinks and oversized single files; no project quota is enabled.
 6. Preserve backend evidence and server caches during testing. Explicit project deletion currently retains separately stored private evidence/state; cleanup policy has not been chosen and this change does not remove those retained records.
+
+### Reclamation and interrupted delivery
+
+Backend workers sharing projects must share the same `PA_DATA` filesystem and its
+`flock` semantics. Execution, compilation and reclamation use the project's
+`runtime.lock`; a sweep skips a locked project and rereads runtime records after
+acquiring the lock. Startup leaves persisted project statuses intact because an
+empty process-local task registry does not establish that another worker died.
+
+Submitted process jobs are queried on their original sandbox before reclamation.
+A missing completion receipt or a failed status query protects the sandbox even
+past the normal 900-second idle limit. Completed jobs with pending delivery are
+recovered by job ID before deletion, without resubmitting their code. Recovery
+rebuilds logs from byte zero and uses the existing output manifests and evidence
+sealing. A failed recovery keeps `delivery_state=pending` and records its attempt
+and deadline in the run manifest.
+
+`PAPERAGENT_SANDBOX_RECOVERY_TTL_SECONDS` bounds additional renewal after recovery
+failure (default 86400 seconds; minimum 900). Its deadline is fixed on the first
+failure, not extended on each sweep. After the deadline, automatic extra renewal
+stops and the server's sandbox TTL can expire; local pending records and evidence
+remain. This does not guarantee remote availability during server outages or
+beyond the server's lifetime limits. Unknown/running jobs are never forcibly
+killed by the idle sweeper. Healthy execution renewal, research reuse, immediate
+compiler cleanup and the ordinary 15-minute idle limit retain their existing
+behavior.
+
+Research turns also hold a separate `coordinator.lock` from admission through
+final output persistence, including model waits and cancellation cleanup. An OS
+process exit releases that lock. Opening a research snapshot, task status,
+WebSocket connection or pause endpoint repairs an unowned `in_progress` project
+to `paused` while holding the lock; a conditional database update avoids
+replacing a concurrent terminal status. This restores the existing Resume UI
+after a crash without a global startup status reset. An active owner in another
+worker keeps its status and rejects duplicate admission. Pausing through a
+non-owning worker returns HTTP 409 instead of pretending to cancel that task.
+Workers must run this ownership protocol together on the shared backend state;
+mixed old/new worker versions cannot provide this guarantee.
+
+Automatic reclamation recovery disables the provider's normal `_sustain` loop
+for the whole sweeper session, including nested status and transfer commands.
+Only its explicit bounded failure-retention renewal may extend a sandbox. Each
+attempt is capped by the remaining recovery deadline; after that deadline no
+automatic recovery or extra renewal is attempted. Explicit user recovery and
+normal execution retain their usual renewal loop.

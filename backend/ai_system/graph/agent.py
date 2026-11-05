@@ -97,12 +97,14 @@ class PaperGraphAgent:
         temporary.replace(path)
 
     def _context(self) -> GraphContext:
+        options = dict(self.options)
+        options.setdefault('sandbox_work_id', self.work_id)
         return GraphContext.create(
             self.workspace_dir,
             planner_llm=self.llm,
             coder_llm=self.codeagent_llm,
             stream_manager=self.stream_manager,
-            **self.options,
+            **options,
         )
 
     async def _emit(self, block_type: str, content: Any) -> None:

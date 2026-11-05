@@ -142,10 +142,10 @@ def test_actual_pdf_pages_and_model_images_are_version_bound(tmp_path):
     from langchain_core.messages import ToolMessage
     receipt=ToolMessage(content=tool_content(ctx,result,None),tool_call_id='preview')
     assert 'base64' not in receipt.content
-    media=ImageProjection(tmp_path,SimpleNamespace(profile={'image_inputs':True,'image_tokens_per_image':4096}),{})
+    media=ImageProjection(tmp_path,SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1'),{})
     image=media.hydrate(media.view([receipt],max_tokens=10000))[0].content
     assert image[1]['image_url']['url'].startswith('data:image/png;base64,')
-    text=ImageProjection(tmp_path,SimpleNamespace(profile={}),{}).view([receipt],max_tokens=10000)[0]
+    text=ImageProjection(tmp_path,SimpleNamespace(metadata={'generation_settings':{'image_inputs':False}}),{}).view([receipt],max_tokens=10000)[0]
     assert '不能声称已做视觉检查' in text.content
     with pytest.raises(ValueError,match='超出范围'):render_pages(tmp_path,version,pdf_hash,[3])
     with pytest.raises(FileNotFoundError):render_pages(tmp_path,'b'*64,pdf_hash,[1])
@@ -165,11 +165,13 @@ def test_snapshot_push_coalesces_and_stops_after_close():
     asyncio.run(run())
 
 
-def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypatch):
+@pytest.mark.parametrize('content_blocks',[False,True])
+def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypatch,content_blocks):
     import pypdfium2 as pdfium
     from langchain_core.messages import AIMessage,ToolMessage
     from research_tools_helpers import ResearchToolsModel,tool
     from ai_system.modules.registry import invoke
+    answer='第1页已看；仅复核提供的版本，未执行计算。'
     def child(messages):
         receipts=[m for m in messages if isinstance(m,ToolMessage)]
         if not receipts:return tool('view_pdf_pages',{'pages':[1]},'review-page')
@@ -177,9 +179,11 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
             assert isinstance(receipts[0].content,list)
             assert receipts[0].content[1]['type']=='image_url'
             return tool('read_file',{'path':'paper.tex'},'review-source')
-        return AIMessage(content='第1页已看；仅复核提供的版本，未执行计算。')
-    model=ResearchToolsModel(respond=child,profile={'image_inputs':True,'max_input_tokens':128000},
-        metadata={'generation_settings':{'image_tokens_per_image':4096}})
+        return AIMessage(content=[
+            {'type':'reasoning','encrypted_content':'private-encrypted-marker','text':'private-reasoning-marker'},
+            {'type':'text','text':answer},
+        ] if content_blocks else answer)
+    model=ResearchToolsModel(respond=child,profile={'max_input_tokens':128000},metadata={})
     ctx=context(tmp_path);ctx.coder_llm=model
     (tmp_path/'paper.tex').write_text(r'\begin{document}Known manuscript\end{document}')
     version=project.snapshot(tmp_path)['version'];pdf=tmp_path/'paper.pdf'
@@ -193,6 +197,7 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
         value=await invoke(ctx,'research.delegate',purpose='document_review',task='逐页检查实际稿件',
             source_version=version,pdf_sha256=pdf_hash)
         assert value['status']=='completed' and value['advisory'] and value['reviewed_pages']==[1]
+        assert value['answer']==answer
         assert b'data:image/png;base64' not in workspace_path(tmp_path,'.system/graph.sqlite').read_bytes()
         assert (tmp_path/'paper.tex').read_text()==r'\begin{document}Known manuscript\end{document}'
         calls=model.calls

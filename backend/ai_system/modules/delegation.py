@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from langchain_core.messages import HumanMessage
+from ai_system.graph.commentary import public_progress
 from .registry import Inputs,CapabilityProduct
 
 
@@ -61,7 +62,7 @@ async def delegate(ctx, inputs):
     folder=workspace_path(store.root,'.system/tasks/'+tid+'/workspace')
     folder.mkdir(parents=True,exist_ok=True)
     local=GraphContext.create(str(folder),planner_llm=ctx.planner_llm,coder_llm=ctx.coder_llm,
-                              experience_scope=ctx.experience_scope)
+                              experience_scope=ctx.experience_scope,sandbox_work_id=ctx.kernels.work_id)
     local.research=store
     aliases={name:('outputs/imported/'+version+'/'+Path(name).name if name.startswith('outputs/research/') else name)
              for name,version in sources.items()}
@@ -127,7 +128,7 @@ async def delegate(ctx, inputs):
                                        middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-task-'+tid,
                                            pinned={'initial_task':record['initial_task'],'follow_up':inputs['task'],'files':sources}),receipts])
                     result=await run_session(agent,store.research_id+'-task-'+tid,messages)
-            record.update(answer=str(result['messages'][-1].content),model_task=inputs['task'],status='delivering')
+            record.update(answer='\n\n'.join(public_progress(result['messages'][-1].content)),model_task=inputs['task'],status='delivering')
             save()
         export_solution_code(local,'task',runs)
         # Reuse the existing immutable run publisher, including logs and code.
@@ -241,7 +242,7 @@ async def review_document(ctx, inputs):
                     middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-review-'+tid,pinned={
                         'source_version':version,'pdf_sha256':pdf_hash,'files':list(manifest),'materials':sources}),visual])
                 result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])])
-        record.update(status='completed',answer=str(result['messages'][-1].content),reviewed_pages=sorted(seen))
+        record.update(status='completed',answer='\n\n'.join(public_progress(result['messages'][-1].content)),reviewed_pages=sorted(seen))
     except BaseException:
         record['status']='interrupted';raise
     finally:save()

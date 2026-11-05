@@ -103,12 +103,6 @@
           {{ t('login.hasAccount') }}
           <t-link theme="primary" @click="switchMode">{{ t('login.signInNow') }}</t-link>
         </p>
-        <details v-if="isLogin && originHint" class="passkey-help">
-          <summary>
-            {{ locale.startsWith('zh') ? '关于通行密钥登录' : 'About passkey sign-in' }}
-          </summary>
-          <p class="passkey-hint">{{ originHint }}</p>
-        </details>
       </div>
     </div>
   </div>
@@ -141,14 +135,6 @@ const authStore = useAuthStore()
 const isLogin = ref(true)
 const passkeySupported = ref(false)
 const passkeyOriginOk = ref(true)
-const originHint = computed(() => {
-  if (passkeyOriginOk.value) return null
-  return t(
-    /^\d{1,3}(?:\.\d{1,3}){3}$/.test(window.location.hostname)
-      ? 'login.passkeyIpHint'
-      : 'login.passkeySecureHint',
-  )
-})
 const passkeyLoading = ref(false)
 const passwordLoading = ref(false)
 let conditionalLoginActive = false
@@ -414,16 +400,4 @@ const onSubmit = async ({ validateResult }: { validateResult: any }) => {
   padding: 0 12px;
 }
 
-.passkey-hint {
-  margin-top: 12px !important;
-  font-size: 13px;
-  color: var(--pa-placeholder);
-}
-.passkey-help {
-  font-size: 13px;
-  color: var(--td-text-color-placeholder);
-}
-.passkey-help summary {
-  cursor: pointer;
-}
 </style>

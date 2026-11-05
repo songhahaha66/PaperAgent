@@ -141,6 +141,7 @@ class OpenSandboxSession:
 
     async def _create(self, config, Sandbox, NetworkPolicy):
         from opensandbox.models import Volume, Host
+        from .reclaim import sandbox_metadata
         self.lease_path.parent.mkdir(parents=True, exist_ok=True)
         # The server starts the TTL when it accepts create. Do not add startup_timeout:
         # that made the local clock later than the real recycle time.
@@ -155,7 +156,7 @@ class OpenSandboxSession:
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
             network_policy=NetworkPolicy(default_action="deny"),
             volumes=[Volume(name='execution-cache', host=Host(path=self.volume_path), mount_path='/workspace')],
-            metadata={"application": "paperagent"},
+            metadata=sandbox_metadata(work_id=self.work_id, experiment_id=self.experiment_id, cache_key=self.cache_key),
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
@@ -286,6 +287,8 @@ class OpenSandboxSession:
 
     async def _sustain(self, needed):
         """Keep renewing a live call so the server TTL cannot cut it off."""
+        if not getattr(self, 'automatic_renewal', True):
+            return
         try:
             while True:
                 if not getattr(self, 'sandbox', None) or not hasattr(self.sandbox, 'renew'):
@@ -323,6 +326,21 @@ class OpenSandboxSession:
         if value.get('job_id') != run_id:
             raise ValueError('Process receipt belongs to another job')
         return value
+
+    async def job_status(self, run_id):
+        """Inspect the original job without submission, interruption or log cursors."""
+        value = await self._job_rpc('status', run_id)
+        done = value.get('done')
+        if done is not None:
+            if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
+                raise ValueError('Invalid process completion receipt')
+            return False
+        # lost/alive False is a positive observation that the supervisor and child
+        # are gone. A failed status RPC still raises and stays unknown.
+        if value.get('lost') is True or value.get('alive') is False:
+            return False
+        # A submitted supervisor without a receipt may still be running.
+        return True if value.get('submitted') else None
 
     async def submit(self, code, run_id, *, timeout=180):
         from opensandbox.models import WriteEntry
@@ -373,15 +391,19 @@ class OpenSandboxSession:
         done = value.get('done')
         drained = all(row['offset'] == row['size'] for row in value['logs'].values())
         cursor['backlog'] = not drained
-        if done is None or not drained:
+        lost = done is None and (value.get('lost') is True or value.get('alive') is False)
+        if (done is None and not lost) or not drained:
             return None
-        if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
-            raise ValueError('Invalid process completion receipt')
         if not cursor['flushed']:
             for channel, decoder in cursor['decoders'].items():
                 if text := decoder.decode(b'', final=True):
                     await output(channel, text)
             cursor['flushed'] = True
+        if lost:
+            return ExecutionOutcome(error='执行进程已消失，没有完成回执；计算未完成，不会自动重跑',
+                                    exit_code=None, stop_reason='lost', receipt=None)
+        if done.get('job_id') != run_id or not isinstance(done.get('exit_code'), int):
+            raise ValueError('Invalid process completion receipt')
         reason = done.get('stop_reason')
         error = {'timeout': '代码执行超时，当前进程已停止；日志和工作区文件保留',
                  'cancelled': '执行已取消，当前进程已停止',
@@ -390,8 +412,8 @@ class OpenSandboxSession:
         return ExecutionOutcome(error=error, exit_code=done['exit_code'],
                                 duration_seconds=done['duration_seconds'], stop_reason=reason, receipt=done)
 
-    async def _follow(self, run_id, output):
-        holder = asyncio.create_task(self._sustain(self.settings.max_timeout))
+    async def _follow(self, run_id, output, *, renew=True):
+        holder = asyncio.create_task(self._sustain(self.settings.max_timeout)) if renew else None
         try:
             while True:
                 read_failed = False
@@ -410,20 +432,26 @@ class OpenSandboxSession:
                 if read_failed or not self._cursor(run_id).get('backlog'):
                     await asyncio.sleep(self.poll_interval)
         finally:
-            holder.cancel()
-            await asyncio.gather(holder, return_exceptions=True)
+            if holder is not None:
+                holder.cancel()
+                await asyncio.gather(holder, return_exceptions=True)
 
     async def execute(self, code, run_id, output, *, timeout=180):
         self._job_outputs[run_id] = output
         await self.submit(code, run_id, timeout=timeout)
         return await self._follow(run_id, output)
 
-    async def recover(self, run_id, output):
+    async def recover(self, run_id, output, *, renew=True):
         # Resume an existing disk-backed job after client/backend disconnection.
         self._job_cursors.pop(run_id, None)
         self.active_job = run_id
         self._job_outputs[run_id] = output
-        return await self._follow(run_id, output)
+        previous = getattr(self, 'automatic_renewal', True)
+        self.automatic_renewal = previous and renew
+        try:
+            return await self._follow(run_id, output, renew=renew)
+        finally:
+            self.automatic_renewal = previous
 
     @property
     def context_id(self):
@@ -469,8 +497,9 @@ class OpenSandboxSession:
             exc.sandbox_stderr = ''.join(logs['stderr'])
             raise
         finally:
-            holder.cancel()
-            await asyncio.gather(holder, return_exceptions=True)
+            if holder is not None:
+                holder.cancel()
+                await asyncio.gather(holder, return_exceptions=True)
             if not task.done(): task.cancel()
             await asyncio.gather(task, return_exceptions=True)
             failed.cancel()

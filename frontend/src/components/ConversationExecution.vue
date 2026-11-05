@@ -16,7 +16,7 @@
       <span v-if="grouped" class="call-state">{{ rows.length }} 次操作</span>
       <span v-if="current?.subject && !grouped" class="subject">{{ current.subject }}</span>
       <span v-if="!grouped && rows.length === 1" class="call-state">{{ status(rows[0]!) }}</span>
-      <time v-if="headingRow">{{ duration(headingRow) }}</time>
+      <time v-if="headingDuration">{{ headingDuration }}</time>
     </button>
     <p v-if="running && progressNote" class="current-note">{{ progressNote }}</p>
     <p v-if="failed && !expanded && failure?.message" class="failure-reason">
@@ -174,6 +174,19 @@ const failure = computed(() =>
 )
 const failed = computed(() => !!failure.value)
 const headline = computed(() => headingRow.value?.label || props.label || '执行记录')
+const headingDuration = computed(() => {
+  if (!grouped.value) return headingRow.value ? duration(headingRow.value) : ''
+  // Elapsed group time includes gaps and counts overlapping calls only once.
+  let start = Infinity
+  let end = -Infinity
+  for (const row of rows.value) {
+    const finished = row.finished_at ?? (callRunning(row) ? now.value : undefined)
+    if (!row.started_at || !finished) return ''
+    start = Math.min(start, row.started_at)
+    end = Math.max(end, finished)
+  }
+  return duration({ ...headingRow.value!, started_at: start, finished_at: end })
+})
 function note(segment: ConversationSegment) {
   if (segment.type !== 'event' || segment.block.type === 'paper_code') return ''
   const content = segment.block.content

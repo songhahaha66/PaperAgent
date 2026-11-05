@@ -10,7 +10,10 @@ from ..utils import route_guard
 from config.paths import get_workspace_path
 from pathlib import Path
 import json
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/works", tags=["works"])
 
@@ -98,6 +101,11 @@ async def delete_work(
     current_user: int = Depends(get_current_user)
 ):
     """删除工作"""
+    from ai_system.sandbox.reclaim import reclaim_project
+    try:
+        await reclaim_project(work_id, 'deleted')
+    except Exception:
+        logger.warning('删除项目前回收沙箱失败 project_id=%s', work_id, exc_info=True)
     return crud.delete_work(db, work_id, current_user)
 
 @router.get("/{work_id}/chat-history")

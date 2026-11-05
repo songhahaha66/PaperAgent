@@ -27,6 +27,7 @@ class EnvApiSettings:
     provider: str = DEFAULT_PROVIDER
     # 供应商私有参数（PAPERAGENT_API_EXTRA_BODY，JSON），如 DeepSeek 官方 API 关闭思考模式 {"thinking": {"type": "disabled"}}
     extra_body: Optional[Dict[str, Any]] = None
+    image_inputs: bool = True
 
 
 def normalize_openai_base_url(url: str) -> str:
@@ -47,6 +48,18 @@ def normalize_openai_base_url(url: str) -> str:
     if path in ("", "/"):
         return cleaned.rstrip("/") + "/v1"
     return cleaned.rstrip("/")
+
+
+def env_bool(name: str, default: bool = True) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} 必须是 true 或 false")
 
 
 def load_env_api_settings() -> Optional[EnvApiSettings]:
@@ -78,6 +91,7 @@ def load_env_api_settings() -> Optional[EnvApiSettings]:
         model_id=model_id or DEFAULT_MODEL,
         provider=provider or DEFAULT_PROVIDER,
         extra_body=json.loads(extra_body_raw) if extra_body_raw else None,
+        image_inputs=env_bool("PAPERAGENT_API_IMAGE_INPUTS", True),
     )
 
 
@@ -91,6 +105,7 @@ class EnvModelConfig:
         self.base_url = settings.base_url
         self.api_key = settings.api_key
         self.extra_body = settings.extra_body
+        self.generation_settings = {"image_inputs": settings.image_inputs}
         self.is_active = True
         self.id = None
         self.created_by = None

@@ -123,6 +123,10 @@ def operation_detail(root, item):
         return f"已列出 {len(output.get('files', []))} 个文件，共 {output['total']} 个。"
     if capability == 'research.search_files' and 'matches' in output:
         return f"本批搜索找到 {len(output['matches'])} 个匹配文件。"
+    if capability == 'research.list_skills' and isinstance(output.get('skills'), list):
+        return f"已找到 {len(output['skills'])} 项可用研究技能。"
+    if capability == 'research.read_skill' and isinstance(output.get('name'), str):
+        return '已读取研究技能：' + safe_diagnostic(root, output['name'], limit=160) + '。'
     if capability == 'research.delegate':
         return safe_diagnostic(root, inputs.get('task', ''), limit=240)
     if capability in {'read_file', 'research.read_artifact'}:
