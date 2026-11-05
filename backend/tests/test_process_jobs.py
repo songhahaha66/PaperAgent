@@ -1,9 +1,16 @@
 """Real trusted subprocesses; no network, live sandbox or model access."""
 import asyncio
 import json
+import os
+import signal
+import subprocess
+import sys
+import time
 
 import pytest
 
+from ai_system.sandbox import job_worker
+from ai_system.sandbox.opensandbox_provider import OpenSandboxSession
 from ai_system.sandbox.remote_kernel import RemoteKernel
 from ai_system.sandbox.settings import SandboxSettings
 from helpers.process_jobs import ProcessJobs
@@ -183,6 +190,96 @@ def test_failed_process_returns_traceback_and_flushes_figures(tmp_path):
             assert result.figures and all(kernel.fs.abs(path).is_file() for path in result.figures)
             assert not result.delivery_error and session.closes == 0
         finally:
+            await kernel.close()
+    asyncio.run(check())
+
+
+def test_dead_supervisor_without_receipt_is_gone_and_fresh_submit_is_still_running(tmp_path):
+    root = tmp_path / 'server'
+    fresh = job_worker.directory(root, 'fresh')
+    job_worker.atomic_json(fresh / 'submitted.json', {
+        'job_id': 'fresh', 'submitted_at': time.time(), 'request_sha256': 'pending'})
+    fresh_status = job_worker.status(root, 'fresh')
+    assert fresh_status['submitted'] and fresh_status['done'] is None
+    assert fresh_status['alive'] is True and fresh_status['lost'] is False
+
+    stale = job_worker.directory(root, 'stale')
+    job_worker.atomic_json(stale / 'submitted.json', {
+        'job_id': 'stale', 'submitted_at': time.time() - job_worker.STARTUP_GRACE_SECONDS - 5,
+        'request_sha256': 'expired'})
+    stale_status = job_worker.status(root, 'stale')
+    assert stale_status['alive'] is False and stale_status['lost'] is True
+
+    gone = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    gone.kill()
+    gone.wait()
+    dead = job_worker.directory(root, 'dead')
+    job_worker.atomic_json(dead / 'submitted.json', {
+        'job_id': 'dead', 'submitted_at': time.time() - 30, 'request_sha256': 'gone'})
+    job_worker.atomic_json(dead / 'process.json', {
+        'job_id': 'dead', 'pid': gone.pid, 'supervisor_pid': gone.pid})
+    dead_status = job_worker.status(root, 'dead')
+    assert dead_status['done'] is None and dead_status['alive'] is False and dead_status['lost'] is True
+
+    zombie = subprocess.Popen([sys.executable, '-c', 'import os; os._exit(0)'])
+    sleeper = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])
+    try:
+        deadline = time.time() + 2
+        while time.time() < deadline and job_worker._pid_alive(zombie.pid):
+            time.sleep(0.01)
+        assert not job_worker._pid_alive(zombie.pid)
+        assert job_worker._pid_alive(sleeper.pid)
+    finally:
+        zombie.wait()
+        sleeper.kill()
+        sleeper.wait()
+    assert not job_worker._pid_alive(sleeper.pid)
+
+    async def check():
+        session = object.__new__(OpenSandboxSession)
+        async def rpc(operation, run_id, argument=None):
+            return job_worker.status(root, run_id)
+        session._job_rpc = rpc
+        assert await session.job_status('fresh') is True
+        assert await session.job_status('dead') is False
+        assert await session.job_status('stale') is False
+    asyncio.run(check())
+
+
+def test_follow_ends_when_the_supervisor_dies_and_the_run_is_reclaimable(tmp_path):
+    async def check():
+        session = ProcessJobs(tmp_path / 'backend', tmp_path / 'server')
+        kernel = RemoteKernel(session.backend_root, session, session.settings, timeout=30)
+        ready = asyncio.Event()
+
+        async def event(value):
+            if value['type'] == 'output':
+                ready.set()
+
+        task = asyncio.create_task(kernel.execute(
+            "import time\nprint('running', flush=True)\ntime.sleep(60)", on_event=event))
+        try:
+            await asyncio.wait_for(ready.wait(), 10)
+            job = next((session.remote / '.pa-jobs').iterdir())
+            record = json.loads((job / 'process.json').read_text())
+            for pid in (record['supervisor_pid'], record['pid']):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            result = await asyncio.wait_for(task, 8)
+            assert result.failure_kind == 'lost' and not result.ok and not result.delivery_error
+            assert kernel.pending_run is None
+            assert '消失' in (result.error or '')
+            info = kernel.fs.get_run_info(result.run_id)
+            assert info['status'] == 'interrupted'
+            assert info['submission_state'] == 'lost' and info['compute_state'] == 'lost'
+            assert info['delivery_state'] != 'pending' and not info.get('delivery_error')
+            assert info.get('exit_code') is None and not info.get('process_receipt')
+            assert not (job / 'done.json').exists()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
             await kernel.close()
     asyncio.run(check())
 

@@ -93,12 +93,67 @@ def _signal(group, value):
         pass
 
 
+# submitted.json is written before the supervisor records process.json. A missing
+# record inside this window is "not started yet", not a dead supervisor.
+STARTUP_GRACE_SECONDS = 15
+
+
 def _exited(proc):
     # Linux production: observe exit without reaping the leader, so its PGID
     # cannot be recycled before the supervisor terminates remaining children.
     if sys.platform == 'linux' and hasattr(os, 'waitid') and hasattr(os, 'WNOWAIT'):
         return os.waitid(os.P_PID, proc.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
     return proc.poll() is not None
+
+
+def _zombie(pid):
+    """True when pid has exited. waitid sees our own children; /proc sees the rest."""
+    if hasattr(os, 'waitid') and hasattr(os, 'WNOWAIT'):
+        try:
+            if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+                return True
+        except ChildProcessError:
+            pass
+        except OSError:
+            return False
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text()
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    end = stat.rfind(')')
+    if end < 0 or end + 2 >= len(stat):
+        return False
+    state = stat[end + 2:].split(None, 1)[0]
+    return state == 'Z'
+
+
+def _pid_alive(pid):
+    """False only when the pid is gone or a zombie. Unreadable pids stay alive."""
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return not _zombie(pid)
+
+
+def _liveness(target):
+    process = target / 'process.json'
+    if not process.exists():
+        submitted = json.loads((target / 'submitted.json').read_text())
+        if time.time() - float(submitted['submitted_at']) < STARTUP_GRACE_SECONDS:
+            return {'alive': True, 'lost': False}
+        return {'alive': False, 'lost': True}
+    record = json.loads(process.read_text())
+    if record.get('job_id') != target.name:
+        raise ValueError('Process record belongs to another job')
+    alive = _pid_alive(record.get('supervisor_pid')) or _pid_alive(record.get('pid'))
+    return {'alive': alive, 'lost': not alive}
 
 
 def supervise(root, job_id, lock_fd):
@@ -203,7 +258,13 @@ def status(root, job_id, offsets=None, chunk_bytes=64 * 1024):
                 stream.seek(offset)
                 raw = stream.read(min(chunk_bytes, 64 * 1024, size - offset))
         logs[name] = {'data': base64.b64encode(raw).decode('ascii'), 'offset': offset + len(raw), 'size': size}
-    return {'job_id': job_id, 'submitted': (target / 'submitted.json').exists(), 'done': done, 'logs': logs}
+    submitted = (target / 'submitted.json').exists()
+    value = {'job_id': job_id, 'submitted': submitted, 'done': done, 'logs': logs}
+    # A dead supervisor never writes done.json. Say so, except during the brief
+    # gap before process.json exists.
+    if submitted and done is None:
+        value.update(_liveness(target))
+    return value
 
 
 def stop(root, job_id, reason):
