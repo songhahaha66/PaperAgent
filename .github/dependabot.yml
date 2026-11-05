@@ -48,6 +48,11 @@ updates:
     ignore:
       - dependency-name: "vue"
         update-types: ["version-update:semver-major"]
+      # vue-tsc 3 / Volar require the classic TypeScript compiler API.
+      # Revisit when stable Vue tooling supports TypeScript 7:
+      # https://github.com/vuejs/language-tools/issues/5381
+      - dependency-name: "typescript"
+        versions: [">=7.0.0"]
 
   # Docker dependencies
   - package-ecosystem: "docker"
