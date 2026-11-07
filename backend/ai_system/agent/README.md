@@ -48,7 +48,7 @@ The WebSocket envelope is:
 
 The abbreviated Item above omits required tool fields. Lifecycle methods are `thread/started`, `turn/started`, `turn/completed`, `item/started`, `item/updated`, `item/completed` and `item/agentMessage/delta`. In this protocol message updates carry the current complete Item snapshot, including on `item/agentMessage/delta`; clients replace by ID rather than appending text. Token buffering flushes at 4 KiB or every 500 ms and is sealed before terminal completion.
 
-Browser merging uses the durable `event.seq`, independently of the process-local transport cursor `(chat_task_id, seq)`. Refresh and reconnect reload persisted history; lower-sequence history cannot roll back newer live state. A child Turn completion cannot complete the root Turn. Opening details resolves Item IDs only within the authorized root Turn.
+Browser merging uses the durable `event.seq`, independently of the process-local transport cursor `(chat_task_id, seq)`. Refresh and reconnect read Items, root Turn status and the event cursor in one database snapshot; lower-sequence history cannot roll back newer live state. A child Turn completion cannot complete the root Turn. Opening details resolves Item IDs only within the authorized root Turn.
 
 ## One execution boundary
 

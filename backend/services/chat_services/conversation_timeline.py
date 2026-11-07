@@ -26,11 +26,10 @@ def public_reply(reply, *, root=None):
         return reply
     turn_id = reply['metadata']['turn_id']
     store = AgentStore(root, read_only=True)
-    items = store.items(root_turn_id=turn_id, limit=100000)
-    events = store.events(turn_id)
-    terminal = next((e for e in reversed(events) if e['method']=='turn/completed' and e['turn_id']==turn_id), None)
-    metadata = {**reply['metadata'], 'event_seq': events[-1]['seq'] if events else 0}
-    if terminal:metadata['status'] = terminal['turn']['status']
+    snapshot = store.turn_snapshot(turn_id)
+    items = snapshot['items']
+    metadata = {**reply['metadata'], 'event_seq': snapshot['event_seq']}
+    if snapshot['turn']:metadata['status'] = snapshot['turn']['status']
     content = '\n\n'.join(i['text'] for i in items if i['type']=='agentMessage' and i['thread_id']==metadata['thread_id'])
     return {**reply, 'items':items, 'content':content, 'metadata':metadata}
 

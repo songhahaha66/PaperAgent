@@ -100,6 +100,44 @@ def test_restart_reconciliation_does_not_rewrite_newer_reply(tmp_path):
     assert interrupted['content'] == 'durable'
 
 
+@pytest.mark.parametrize('complete', [False, True])
+def test_history_cursor_and_items_share_a_snapshot_during_live_updates(tmp_path, monkeypatch, complete):
+    from ai_system.agent.store import AgentStore
+    from services.chat_services.conversation_timeline import public_reply
+    _, root, reply, _ = writer(tmp_path)
+    reply.text('Before'); reply.flush()
+    cached = deepcopy(reply.reply)
+    before_seq = cached['metadata']['event_seq']
+    connect = AgentStore.connect
+    updated = False
+
+    def concurrent_update(sql):
+        nonlocal updated
+        # Commit through another connection after the history Item read, just
+        # before its cursor read. WAL permits this while a reader holds a snapshot.
+        if not updated and 'FROM events' in sql:
+            updated = True
+            reply.text(' plus live')
+            if complete: reply.finish('completed')
+            else: reply.flush()
+
+    def traced_connect(store):
+        db = connect(store)
+        if store.read_only: db.set_trace_callback(concurrent_update)
+        return db
+
+    monkeypatch.setattr(AgentStore, 'connect', traced_connect)
+    history = public_reply(cached, root=root)
+    assert updated and reply.reply['content'] == 'Before plus live'
+    assert history['content'] == 'Before'
+    assert history['metadata']['event_seq'] == before_seq
+    assert history['metadata']['status'] == 'running'
+    current = public_reply(cached, root=root)
+    assert current['content'] == 'Before plus live'
+    assert current['metadata']['event_seq'] == reply.reply['metadata']['event_seq']
+    assert current['metadata']['status'] == ('completed' if complete else 'running')
+
+
 def test_reference_resolver_uses_existing_work_authorization(monkeypatch, tmp_path):
     import asyncio
     from types import SimpleNamespace

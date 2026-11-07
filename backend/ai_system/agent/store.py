@@ -169,14 +169,24 @@ class AgentStore:
         with closing(self.connect()) as db:
             return [json.loads(row[0]) for row in db.execute('SELECT e.payload FROM events e JOIN turns t ON t.id=e.turn_id WHERE t.root_turn_id=? AND e.seq>? ORDER BY e.seq', (root_turn_id, after))]
 
+    def turn_snapshot(self, root_turn_id):
+        """Read Items, root status and replay cursor at the same committed revision."""
+        if not self.path.exists():return {'items': [], 'turn': None, 'event_seq': 0}
+        with closing(self.connect()) as db:
+            # A newer cursor with older Items would make the browser discard the
+            # missing live events. Explicit BEGIN pins all reads to one WAL snapshot.
+            db.execute('BEGIN')
+            rows = db.execute('SELECT i.payload FROM items i JOIN turns t ON t.id=i.turn_id '
+                              'WHERE t.root_turn_id=? ORDER BY i.rowid', (root_turn_id,)).fetchall()
+            turn = db.execute('SELECT payload FROM turns WHERE id=?', (root_turn_id,)).fetchone()
+            seq = db.execute('SELECT COALESCE(MAX(e.seq),0) FROM events e JOIN turns t ON t.id=e.turn_id '
+                             'WHERE t.root_turn_id=?', (root_turn_id,)).fetchone()[0]
+        return {'items': [json.loads(row[0]) for row in rows],
+                'turn': json.loads(turn[0]) if turn else None, 'event_seq': seq}
+
     def interrupt(self, *, root_turn_id=None, research_id=None):
         """Coordinator-only reconciliation after ownership of the previous run ends."""
         events = []
-        for item in self.items(root_turn_id=root_turn_id, research_id=research_id, limit=100000):
-            if item['status'] == 'running':
-                item.update(status='interrupted', finished_at=time.time())
-                event = self.put_item(item, 'item/completed')
-                if event:events.append(event)
         with closing(self.connect()) as db:
             rows = db.execute('SELECT t.payload FROM turns t JOIN threads th ON th.id=t.thread_id WHERE '+
                               ('t.root_turn_id=?' if root_turn_id else "(th.research_id=? OR t.id IN (SELECT turn_id FROM items WHERE json_extract(payload,'$.research_id')=?))"),
@@ -184,6 +194,13 @@ class AgentStore:
         for row in rows:
             turn = Turn.model_validate_json(row[0])
             if turn.status == 'running':
+                # Research ownership selects Turns. Message Items in a workspace
+                # Thread have no research_id but must close with their tools.
+                for item in self.items(turn_id=turn.id, limit=100000):
+                    if item['status'] == 'running':
+                        item.update(status='interrupted', finished_at=time.time())
+                        event = self.put_item(item, 'item/completed')
+                        if event:events.append(event)
                 event = self.finish_turn(turn.id, 'interrupted')
                 if event:events.append(event)
         return events

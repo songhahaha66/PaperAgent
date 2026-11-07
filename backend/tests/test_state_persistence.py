@@ -52,6 +52,27 @@ def test_agent_store_does_not_read_old_activity_or_message_segments(tmp_path):
     assert 'segments' not in public_reply({'id':'old','segments':[{'type':'execution'}]})
 
 
+def test_research_recovery_closes_unfinished_chat_text_in_its_turn(tmp_path):
+    from ai_system.agent.protocol import MessageItem
+    store = ResearchStore(tmp_path, 'research'); store.initialize('Resume after a crash')
+    # Browser Threads are workspace-scoped; only their tool Items carry research_id.
+    old = new_turn(tmp_path, 'work')
+    old.put(MessageItem(id='text', thread_id='work', turn_id=old.turn_id,
+                        type='agentMessage', text='Partial answer', started_at=1).model_dump(), 'item/started')
+    old.put(ToolItem(id='tool', thread_id='work', turn_id=old.turn_id, research_id='research',
+                     type='toolCall', tool_name='read_file', call_id='read', label='Read',
+                     started_at=2).model_dump(), 'item/started')
+    current = new_turn(tmp_path, 'work')
+    current.put(MessageItem(id='new-text', thread_id='work', turn_id=current.turn_id,
+                            type='agentMessage', text='New request', started_at=3).model_dump(), 'item/started')
+    store.recover()
+    recovered = old.store.turn_snapshot(old.turn_id)
+    assert recovered['turn']['status'] == 'interrupted'
+    assert all(item['status'] == 'interrupted' for item in recovered['items'])
+    assert current.store.turn_snapshot(current.turn_id)['turn']['status'] == 'running'
+    assert current.store.get_item('new-text')['status'] == 'running'
+
+
 def test_resume_never_rebuilds_business_from_checkpoint(tmp_path):
     agent = PaperGraphAgent(None, workspace_dir=str(tmp_path))
     ctx = agent._context(); ctx.research = ResearchStore(tmp_path, 'missing')
