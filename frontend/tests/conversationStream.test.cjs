@@ -5,6 +5,10 @@ const deadline = setTimeout(() => {
   process.exit(1)
 }, 10000)
 ;(async () => {
+  const frame=(seq,text,reply_id='reply',chat_task_id='chat-task',status='running')=>({
+    type:'agent_event',task_id:chat_task_id,update:{reply_id,chat_task_id,thread_id:'lead',turn_id:reply_id,
+      event:{seq,method:status==='completed'?'item/completed':'item/agentMessage/delta',thread_id:'lead',turn_id:reply_id,
+        item:{id:reply_id==='reply'?'text':'remote-text',thread_id:'lead',turn_id:reply_id,sequence:1,type:'agentMessage',phase:'final_answer',status,started_at:1,text}}}})
   const sockets = [],
     cleanup = []
   let history, pendingHistory
@@ -34,8 +38,8 @@ const deadline = setTimeout(() => {
     role: 'assistant',
     content: 'Before',
     timestamp: '2026-10-22T00:00:00Z',
-    segments: [{ id: 'text', type: 'text', text: 'Before' }],
-    metadata: { reply_id: 'reply', chat_task_id: 'chat-task', revision: 2, status: 'running' },
+    items: [{ id:'text',type:'agentMessage',text:'Before',thread_id:'lead',turn_id:'reply',sequence:1,status:'running',started_at:1 }],
+    metadata: { reply_id: 'reply', chat_task_id: 'chat-task', thread_id:'lead',turn_id:'reply',event_seq: 2, status: 'running' },
   }
   const older = {
     id: 'older',
@@ -119,16 +123,7 @@ const deadline = setTimeout(() => {
   )
   let socket = sockets[0]
   socket.message({ type: 'reconnect', reply_id: 'reply', task_id: 'chat-task' })
-  socket.message({
-    type: 'reply_update',
-    update: {
-      reply_id: 'reply',
-      chat_task_id: 'chat-task',
-      revision: 2,
-      status: 'running',
-      segments: saved.segments,
-    },
-  })
+  socket.message(frame(2,'Before','reply','chat-task','running'))
   assert.equal(
     state.chatMessages.value.find((m) => m.id === 'reply').content,
     'Before',
@@ -139,16 +134,7 @@ const deadline = setTimeout(() => {
     resolveHistory = resolve
   })
   const load = state.loadChatHistory()
-  socket.message({
-    type: 'reply_update',
-    update: {
-      reply_id: 'reply',
-      chat_task_id: 'chat-task',
-      revision: 3,
-      status: 'running',
-      segments: [{ id: 'text', type: 'text', text: 'Before plus live' }],
-    },
-  })
+  socket.message(frame(3,'Before plus live','reply','chat-task','running'))
   resolveHistory({ messages: history })
   await load
   pendingHistory = null
@@ -168,8 +154,8 @@ const deadline = setTimeout(() => {
     {
       ...saved,
       content: 'Terminal answer',
-      segments: [{ id: 'text', type: 'text', text: 'Terminal answer' }],
-      metadata: { ...saved.metadata, revision: 4, status: 'completed' },
+      items: [{ id: 'text', type: 'agentMessage', text: 'Terminal answer' }],
+      metadata: { ...saved.metadata, event_seq: 4, status: 'completed' },
     },
     {
       ...comment,
@@ -202,31 +188,11 @@ const deadline = setTimeout(() => {
     'Terminal answer',
     'a new remote turn never renames the previous durable reply',
   )
-  socket.message({
-    type: 'reply_update',
-    task_id: 'remote-task',
-    update: {
-      reply_id: 'remote-reply',
-      chat_task_id: 'remote-task',
-      revision: 2,
-      status: 'running',
-      segments: [{ id: 'remote-text', type: 'text', text: 'Remote answer' }],
-    },
-  })
+  socket.message(frame(2,'Remote answer','remote-reply','remote-task','running'))
   socket.message({ type: 'error', scope: 'command', message: 'busy' })
   assert.equal(state.isStreaming.value, true, 'a command rejection cannot terminate a shared run')
   const refreshBeforeFinish = state.loadChatHistory()
-  socket.message({
-    type: 'reply_update',
-    task_id: 'remote-task',
-    update: {
-      reply_id: 'remote-reply',
-      chat_task_id: 'remote-task',
-      revision: 3,
-      status: 'completed',
-      segments: [{ id: 'remote-text', type: 'text', text: 'Final remote answer' }],
-    },
-  })
+  socket.message(frame(3,'Final remote answer','remote-reply','remote-task','completed'))
   await refreshBeforeFinish
   assert.equal(
     state.chatMessages.value.find((m) => m.id === 'remote-reply').content,

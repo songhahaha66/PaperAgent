@@ -7,7 +7,8 @@ from services.file_services.workspace_layout import workspace_path
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
-from services.chat_services.conversation_timeline import ReplyWriter, TIMELINE, resolve_executions
+from services.chat_services.conversation_timeline import TurnWriter, resolve_items
+from ai_system.agent.context import CURRENT_TURN
 from sqlalchemy.orm import Session
 import asyncio
 import logging
@@ -54,7 +55,7 @@ from services.chat_services.connections import ConnectionManager
 manager = ConnectionManager()
 
 # 只用于刷新右侧面板的事件，不写进聊天记录
-TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot', 'research_state', 'research_activity'}
+TRANSIENT_BLOCK_TYPES = {'plan_updated', 'file_changed', 'research_snapshot', 'research_state', 'execution_changed'}
 
 
 @router.get("/work/{work_id}/history")
@@ -85,14 +86,14 @@ async def get_work_chat_history(
     }
 
 
-class ExecutionReferences(BaseModel):
+class ItemReferences(BaseModel):
     reply_id: str = Field(min_length=1, max_length=128)
-    segment_ids: list[str] = Field(max_length=100)
+    item_ids: list[str] = Field(max_length=100)
 
 
-@router.post('/work/{work_id}/execution-references')
+@router.post('/work/{work_id}/items')
 @route_guard
-async def get_execution_references(work_id: str, request: ExecutionReferences,
+async def get_items(work_id: str, request: ItemReferences,
                                    current_user_id: int = Depends(get_current_user),
                                    db: Session = Depends(get_db)):
     chat_service = ChatService(db)
@@ -107,10 +108,10 @@ async def get_execution_references(work_id: str, request: ExecutionReferences,
     if reply is None: raise HTTPException(status_code=404, detail='回复不存在')
     db.close()
     try:
-        rows = await asyncio.to_thread(resolve_executions, get_workspace_path(work_id), reply, request.segment_ids)
+        rows = await asyncio.to_thread(resolve_items, get_workspace_path(work_id), reply, request.item_ids)
     except (OSError, ValueError, sqlite3.Error) as exc:
         raise HTTPException(status_code=503, detail='执行记录暂不可用') from exc
-    return {'reply_id': request.reply_id, 'executions': rows}
+    return {'reply_id': request.reply_id, 'items': rows}
 
 
 @router.get("/work/{work_id}/history/raw")
@@ -286,20 +287,17 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
             async def publish_snapshot(self, kind, content):
                 await self.on_json_block({'type':kind,'content':content},snapshot=True)
 
-            @property
-            def json_blocks(self): return self.writer.reply['json_blocks']
-
             def publish(self, update):
-                # Called under ReplyWriter's lock, including from worker threads.
+                # Called under TurnWriter's lock, including from worker threads.
                 # Assign replay seq synchronously; one FIFO consumer sends live deltas.
                 current = task_manager.get_task(self.work_id)
                 if not current or current.task_id != update['chat_task_id']: return
                 if self.writer is not None:
                     current.final_content = self.writer.reply['content']
-                    current.json_blocks = self.writer.reply['json_blocks'].copy()
-                seq = task_manager.add_output(self.work_id, 'reply_update', update)
+                    current.json_blocks = []
+                seq = task_manager.add_output(self.work_id, 'agent_event', update)
                 self.loop.call_soon_threadsafe(self.queue.put_nowait,
-                    ({'type': 'reply_update', 'update': update, 'reply_id': update['reply_id']}, seq))
+                    ({'type': 'agent_event', 'update': update, 'reply_id': update['reply_id']}, seq))
 
             async def send_updates(self):
                 while True:
@@ -321,7 +319,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                 self.writer.text(content)
 
             async def on_json_block(self, block, *, snapshot=False):
-                if not snapshot and block.get('type') in {'research_state','research_activity'}:
+                if not snapshot and block.get('type') in {'research_state','execution_changed'}:
                     self.research_push.schedule()
                     return
                 if block.get('type')=='research_snapshot' and not snapshot:
@@ -370,8 +368,8 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
         history = await asyncio.to_thread(chat_service.get_work_chat_history, work_id, 10)
         history = [m for m in history if m.get('id') != turn['id']][-8:]
 
-        ws_callback.writer = ReplyWriter(chat_service.history_manager, work_id, task.task_id,
-                                           workspace_dir, ws_callback.publish)
+        ws_callback.writer = TurnWriter(chat_service.history_manager, work_id, task.task_id,
+                                           workspace_dir, ws_callback.publish,user_message=turn)
         task.reply_id = ws_callback.writer.id
         ws_callback.timer = asyncio.create_task(ws_callback.flush_text())
         task_manager.start_task(work_id)
@@ -380,7 +378,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
 
         async def run_ai_task():
             nonlocal action, subproblem_id, revision_command
-            timeline_token = TIMELINE.set(ws_callback.writer)
+            turn_token = CURRENT_TURN.set(ws_callback.writer.turn)
             try:
                 async def execute(route):
                     nonlocal action, subproblem_id, revision_command
@@ -464,9 +462,11 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                     history_manager=chat_service.history_manager, work_id=work_id, turn=turn, execute=execute, paper_context=paper_context))
 
                 # 停在"确认建模方案"时工作是待确认，不是已完成
-                failed_blocks = any(b.get('type') == 'main_agent_error' for b in ws_callback.json_blocks)
+                failed_turn = any(item['type'] == 'notice' and item['name'] == 'main_agent_error'
+                                  and item['thread_id'] == ws_callback.writer.turn.thread_id
+                                  for item in ws_callback.writer.reply['items'])
                 from ai_system.research.views import completed_work_status
-                work_status = original_status if action in {'ask', 'clarify'} else ('failed' if failed_blocks else
+                work_status = original_status if action in {'ask', 'clarify'} else ('failed' if failed_turn else
                     await asyncio.to_thread(completed_work_status, workspace_dir))
                 if action not in {'ask', 'clarify'}:
                     await loop.run_in_executor(None, set_work_status, work_id, work_status)
@@ -476,9 +476,9 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                     except ValueError:
                         logger.warning("研究快照暂不可读，保留任务完成状态: %s", work_id)
 
-                await ws_callback.finalize('failed' if failed_blocks else 'completed')
+                await ws_callback.finalize('failed' if failed_turn else 'completed')
                 await asyncio.to_thread(chat_service.history_manager.update_turn, work_id, turn['id'],
-                                        turn_status='failed' if failed_blocks else 'completed')
+                                        turn_status='failed' if failed_turn else 'completed')
 
                 # 标记任务完成
                 task_manager.complete_task(work_id)
@@ -528,7 +528,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                     'work_status': original_status if readonly else 'failed'})
                 raise
             finally:
-                TIMELINE.reset(timeline_token)
+                CURRENT_TURN.reset(turn_token)
                 if ws_callback.timer: ws_callback.timer.cancel()
                 ws_callback.sender.cancel()
 

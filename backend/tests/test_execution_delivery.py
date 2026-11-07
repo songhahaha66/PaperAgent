@@ -187,18 +187,20 @@ def test_root_csv_is_collected_and_reads_retained_execution_version(tmp_path):
 
 def test_completed_execution_event_already_links_published_logs(tmp_path, monkeypatch):
     from ai_system.modules.experiments.execution import build_tools
-    from services.chat_services import conversation_timeline as timeline
+    from ai_system.agent.context import new_turn, CURRENT_TURN
     root = tmp_path/'public'
     ctx = GraphContext.create(str(root), planner_llm=None)
     ctx.research = make_store(root)
     events = []
-    monkeypatch.setattr(timeline, 'execution_boundary',
-        lambda root, rid, kind, item: events.append(timeline.execution_projection(root, rid, item)))
+    turn=new_turn(root,'delivery',research_id=ctx.research.research_id,
+                  publish=lambda event: events.append(event['item']) if event.get('item') else None)
     async def run():
+        token=CURRENT_TURN.set(turn)
         try:
             tool = next(t for t in build_tools(ctx, 'Q1') if t.name == 'run_python')
             await tool.ainvoke({'code': 'print(sum([1, 2, 3]))'})
         finally:
+            CURRENT_TURN.reset(token)
             await ctx.kernels.close()
     asyncio.run(run())
     last = events[-1]

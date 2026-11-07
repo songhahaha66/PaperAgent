@@ -11,100 +11,105 @@
           formatDateTime(message.datetime)
         }}</time>
         <div class="chat-markdown">
-          <blockquote v-for="(reference, index) in message.metadata?.paper_context?.references || []" :key="`quote-${index}`">
+          <blockquote
+            v-for="(reference, index) in message.metadata?.paper_context?.references || []"
+            :key="`quote-${index}`"
+          >
             {{ reference.quote }}
           </blockquote>
-          <template v-for="group in timelineGroups(message)" :key="group.id">
-            <ConversationExecution
-              v-if="group.execution"
+          <MarkdownRenderer v-if="!message.items" :content="message.content" :work-id="workId" />
+          <template v-for="item in conversationEntries(message)" :key="item.id">
+            <ConversationOperations
+              v-if="item.type === 'operationGroup'"
+              :operations="item.operations"
+              :items="message.items || []"
               :reply-id="message.id"
-              :group-id="group.id"
-              :label="group.label"
-              :segments="group.segments"
               :work-id="workId"
-              :reply-status="message.metadata?.status"
               @file="$emit('open-file', $event)"
               @result="$emit('open-result', $event)"
             />
-            <template v-else v-for="segment in group.segments" :key="segment.id">
-              <MarkdownRenderer
-                v-if="segment.type === 'text'"
-                :content="segment.phase === 'commentary' ? progressText(segment.text) : segment.text"
-                :work-id="workId"
-                :class="{ 'progress-prose': segment.phase === 'commentary' }"
-              />
-              <template v-else-if="segment.type === 'event'">
-                <div v-if="segment.block.type === 'research_context'" class="answer-sources">
-                  <span>参考材料</span>
-                  <span v-for="path in sourceFiles(segment.block).filter(isResearchSource)" :key="path">
-                    {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
-                  </span>
-                  <button
-                    v-for="path in sourceFiles(segment.block).filter((path) => !isResearchSource(path))"
-                    :key="path"
-                    @click="$emit('open-file', path)"
-                  >
-                    {{ researchSourceLabel(path, sourceFiles(segment.block)) }}
-                  </button>
-                  <button
-                    v-for="id in sourceResults(segment.block)"
-                    :key="id"
-                    @click="$emit('open-result', id)"
-                  >
-                    {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
-                  </button>
-                </div>
-                <template v-else-if="segment.block.type === 'main_agent_complete'">
-                  <MarkdownRenderer :content="completionText(segment.block).summary" />
-                  <details
-                    v-if="completionText(segment.block).diagnostic"
-                    class="completion-diagnostic"
-                  >
-                    <summary>编译详情</summary>
-                    <pre>{{ completionText(segment.block).diagnostic }}</pre>
-                  </details>
-                </template>
-                <div v-else class="json-block" :class="`event-${eventKind(segment.block)}`">
-                  <button
-                    type="button"
-                    class="json-block-header"
-                    :aria-expanded="!isBlockCollapsed(message.id, segment.id, segment.block)"
-                    :aria-controls="`event-${message.id}-${segment.id}`"
-                    @click="toggleBlock(message.id, segment.id, segment.block)"
-                  >
-                    <span class="header-text">{{ eventTitle(segment.block) }}</span>
-                    <span v-if="eventKind(segment.block) === 'error'" class="header-note"
-                      >需要处理</span
-                    >
-                  </button>
-                  <div
-                    v-if="!isBlockCollapsed(message.id, segment.id, segment.block)"
-                    :id="`event-${message.id}-${segment.id}`"
-                    class="json-block-content"
-                  >
-                    <MarkdownRenderer
-                      v-if="readableEvent(segment.block)"
-                      :content="readableEvent(segment.block)"
-                    />
-                    <p v-else>操作记录已保存。</p>
-                  </div>
-                  <div v-if="eventKind(segment.block) !== 'normal'" class="event-actions">
-                    <button
-                      v-if="
-                        eventKind(segment.block) === 'confirm' &&
-                        index === messages.length - 1 &&
-                        workStatus === 'waiting' &&
-                        !message.isStreaming &&
-                        !confirmBusy
-                      "
-                      type="button"
-                      @click="$emit('confirm-plan')"
-                    >
-                      继续研究
-                    </button>
-                  </div>
-                </div>
+            <MarkdownRenderer
+              v-else-if="item.type === 'agentMessage'"
+              :content="item.phase === 'commentary' ? progressText(item.text) : item.text"
+              :work-id="workId"
+              :class="{ 'progress-prose': item.phase === 'commentary' }"
+            />
+            <template v-else-if="item.type === 'notice' || item.type === 'inputRequest'">
+              <div v-if="noticeBlock(item).type === 'research_context'" class="answer-sources">
+                <span>参考材料</span>
+                <span
+                  v-for="path in sourceFiles(noticeBlock(item)).filter(isResearchSource)"
+                  :key="path"
+                >
+                  {{ researchSourceLabel(path, sourceFiles(noticeBlock(item))) }}
+                </span>
+                <button
+                  v-for="path in sourceFiles(noticeBlock(item)).filter(
+                    (path) => !isResearchSource(path),
+                  )"
+                  :key="path"
+                  @click="$emit('open-file', path)"
+                >
+                  {{ researchSourceLabel(path, sourceFiles(noticeBlock(item))) }}
+                </button>
+                <button
+                  v-for="id in sourceResults(noticeBlock(item))"
+                  :key="id"
+                  @click="$emit('open-result', id)"
+                >
+                  {{ snapshot?.results.find((r) => r.id === id)?.name || '查看实测结果' }}
+                </button>
+              </div>
+              <template v-else-if="noticeBlock(item).type === 'main_agent_complete'">
+                <MarkdownRenderer :content="completionText(noticeBlock(item)).summary" />
+                <details
+                  v-if="completionText(noticeBlock(item)).diagnostic"
+                  class="completion-diagnostic"
+                >
+                  <summary>编译详情</summary>
+                  <pre>{{ completionText(noticeBlock(item)).diagnostic }}</pre>
+                </details>
               </template>
+              <div v-else class="json-block" :class="`event-${eventKind(noticeBlock(item))}`">
+                <button
+                  type="button"
+                  class="json-block-header"
+                  :aria-expanded="!isBlockCollapsed(message.id, item.id, noticeBlock(item))"
+                  :aria-controls="`event-${message.id}-${item.id}`"
+                  @click="toggleBlock(message.id, item.id, noticeBlock(item))"
+                >
+                  <span class="header-text">{{ eventTitle(noticeBlock(item)) }}</span>
+                  <span v-if="eventKind(noticeBlock(item)) === 'error'" class="header-note"
+                    >需要处理</span
+                  >
+                </button>
+                <div
+                  v-if="!isBlockCollapsed(message.id, item.id, noticeBlock(item))"
+                  :id="`event-${message.id}-${item.id}`"
+                  class="json-block-content"
+                >
+                  <MarkdownRenderer
+                    v-if="readableEvent(noticeBlock(item))"
+                    :content="readableEvent(noticeBlock(item))"
+                  />
+                  <p v-else>操作记录已保存。</p>
+                </div>
+                <div v-if="eventKind(noticeBlock(item)) !== 'normal'" class="event-actions">
+                  <button
+                    v-if="
+                      eventKind(noticeBlock(item)) === 'confirm' &&
+                      index === messages.length - 1 &&
+                      workStatus === 'waiting' &&
+                      !message.isStreaming &&
+                      !confirmBusy
+                    "
+                    type="button"
+                    @click="$emit('confirm-plan')"
+                  >
+                    继续研究
+                  </button>
+                </div>
+              </div>
             </template>
           </template>
           <p v-if="message.metadata?.status === 'interrupted'" class="event-error">
@@ -119,8 +124,14 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import ConversationExecution from './ConversationExecution.vue'
-import { timelineGroups, progressText, type ConversationSegment } from '@/utils/conversationTimeline'
+import ConversationOperations from './ConversationOperations.vue'
+import {
+  conversationEntries,
+  progressText,
+  type ConversationItem,
+  type NoticeItem,
+  type TurnMetadata,
+} from '@/utils/conversationTimeline'
 import type { ResearchSnapshot } from '@/types/research'
 import MarkdownRenderer from '@/components/MarkdownRenderer.vue'
 type PipelineBlock = { type: string; content: unknown }
@@ -135,8 +146,12 @@ interface ChatMessage {
   isStreaming?: boolean
   json_blocks?: any[]
   message_type?: string
-  segments?: ConversationSegment[]
-  metadata?: { status?: string; paper_context?: import('@/api/paper').PaperContext }
+  items?: ConversationItem[]
+  metadata?: TurnMetadata & { paper_context?: import('@/api/paper').PaperContext }
+}
+
+function noticeBlock(item: NoticeItem): PipelineBlock {
+  return { type: item.name, content: item.content }
 }
 
 // Props
@@ -448,8 +463,6 @@ const formatDateTime = (datetime: string) => {
 .chat-markdown {
   line-height: 1.7;
 }
-
-
 
 .answer-sources {
   display: flex;

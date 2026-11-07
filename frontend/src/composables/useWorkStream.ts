@@ -6,7 +6,7 @@ import { workspaceAPI } from '@/api/workspace'
 import { chatAPI, WebSocketChatHandler, type ChatMessage } from '@/api/chat'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 import type { PaperContext } from '@/api/paper'
-import { applyReplyUpdate } from '@/utils/conversationTimeline'
+import { applyAgentEvent } from '@/utils/conversationTimeline'
 import { researchHeadline } from '@/utils/researchProgress'
 import { useStudioCopy } from '@/lang/studio'
 import type { useWorkSession } from '@/composables/useWorkSession'
@@ -124,10 +124,10 @@ export function useWorkStream(options: {
         return isZh.value ? '正在确认你的需求' : 'Clarifying your request'
     }
     return researchHeadline(
-          researchSnapshot.value,
-          currentWork.value?.status || 'created',
-          isZh.value,
-        )
+      researchSnapshot.value,
+      currentWork.value?.status || 'created',
+      isZh.value,
+    )
   })
   const elapsedText = computed(() => {
     if (!isStreaming.value || !taskStartedAt.value) return ''
@@ -167,7 +167,14 @@ export function useWorkStream(options: {
   // One subscription lasts for the workspace view, across all turns.
   const reconnectMessageId = ref<string | null>(null)
   let activeTaskId: string | null = null
-  let pendingCommand: { id: string; userId: string; replyId: string; sent: boolean; message: string; paperContext?: PaperContext } | null = null
+  let pendingCommand: {
+    id: string
+    userId: string
+    replyId: string
+    sent: boolean
+    message: string
+    paperContext?: PaperContext
+  } | null = null
   let socketReady: Promise<WebSocketChatHandler | null> | null = null
 
   const checkAndResumeRunningTask = async () => {
@@ -204,8 +211,8 @@ export function useWorkStream(options: {
         content: '',
         datetime: '',
         avatar: ASSISTANT_AVATAR,
-        segments: [],
-        message_type: 'timeline',
+        items: [],
+        message_type: 'agent_turn',
         isStreaming: true,
       })
     if (pending) {
@@ -339,7 +346,7 @@ export function useWorkStream(options: {
     // Workspace notifications do not depend on a chat placeholder surviving a history reload.
     if (data.type === 'json_block') {
       const block = data.block
-      if (block?.type === 'research_state' || block?.type === 'research_activity') {
+      if (block?.type === 'research_state' || block?.type === 'execution_changed') {
         scheduleResearchRefresh()
         return
       }
@@ -378,42 +385,16 @@ export function useWorkStream(options: {
     const currentMessage = chatMessages.value[messageIndex]
     if (!currentMessage) return
 
-    if (data.type === 'reply_update') {
-      const updated = applyReplyUpdate(currentMessage, data.update)
+    if (data.type === 'agent_event') {
+      const updated = applyAgentEvent(currentMessage, data.update)
       chatMessages.value[messageIndex] = {
         ...updated,
-        message_type: 'timeline',
+        message_type: 'agent_turn',
         isStreaming: updated.metadata?.status === 'running',
       }
       scrollToBottom()
       return
     }
-
-    switch (data.type) {
-      case 'content':
-        chatMessages.value[messageIndex] = {
-          ...currentMessage,
-          content: currentMessage.content + data.content,
-        }
-        break
-
-      case 'json_block':
-        const block = data.block
-
-        if (block?.type === 'plan_updated') {
-          // Plans are projected from the research snapshot, never phase events.
-        } else {
-          chatMessages.value[messageIndex] = {
-            ...currentMessage,
-            json_blocks: [...(currentMessage.json_blocks || []), block],
-            message_type: 'json_card' as const,
-          }
-        }
-        break
-    }
-
-    // 自动滚动
-    scrollToBottom()
   }
 
   let historyGeneration = 0
@@ -442,7 +423,7 @@ export function useWorkStream(options: {
       )
       chatMessages.value = historyData.messages.map((msg, index) => {
         const newer = live.get(msg.id)
-        if (newer && (newer.metadata?.revision || 0) > (msg.metadata?.revision || 0)) return newer
+        if (newer && (newer.metadata?.event_seq || 0) > (msg.metadata?.event_seq || 0)) return newer
         return {
           id: msg.id || `msg_${index}`,
           role: msg.role as 'user' | 'assistant' | 'error' | 'model-change' | 'system',
@@ -450,13 +431,11 @@ export function useWorkStream(options: {
           datetime: msg.datetime || new Date(msg.timestamp).toLocaleString(),
           avatar: getAvatarByRole(msg.role),
           json_blocks: msg.json_blocks || [],
-          segments: msg.segments,
+          items: msg.items,
           metadata: msg.metadata,
           message_type: msg.message_type || 'text',
           paper_execution: msg.paper_execution,
-          isStreaming:
-            msg.role === 'assistant' &&
-            msg.metadata?.status === 'running',
+          isStreaming: msg.role === 'assistant' && msg.metadata?.status === 'running',
         }
       })
 

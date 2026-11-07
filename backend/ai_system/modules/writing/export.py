@@ -17,12 +17,14 @@ from ai_system.graph.state import PaperState
 
 async def _latex(ctx: GraphContext) -> dict:
     from services.chat_services.paper_project import compile_project, source_state
-    from ai_system.research.views import activity
-    with activity(ctx,'writing.compile') as operation:
-        data=await compile_project(ctx.research)
-        operation['display_file']='paper.pdf' if data['compile']['success'] else 'paper.tex'
-        if not data['compile']['success']:
-            operation.update(status='failed',error_type='LatexCompileError',message=data['compile']['message'])
+    from ai_system.agent.runtime import update_tool, tool_metadata
+    tool_metadata(ctx, preview_stage='compiling')
+    data=await compile_project(ctx.research)
+    compilation=data['compile']
+    update_tool(ctx, display_file='paper.pdf' if compilation['success'] else 'paper.tex')
+    tool_metadata(ctx,warnings=compilation['warnings'],warning_count=len(compilation['warnings']))
+    if not compilation['success']:
+        update_tool(ctx,status='failed',error_type='LatexCompileError',message=compilation['message'])
     compilation=data['compile']
     await ctx.events.file_changed('paper.tex')
     if compilation['success']:

@@ -3,7 +3,7 @@ const { loadModule, vue } = require('./moduleHarness.cjs')
 const { hostRenderer } = require('./vueHost.cjs')
 
 ;(async () => {
-  const { researchHeadline, researchExecution, currentActivity, orderedQuestions } = await loadModule('src/utils/researchProgress.ts', {})
+  const { researchHeadline, researchExecution, currentExecution, orderedQuestions } = await loadModule('src/utils/researchProgress.ts', {})
   const snapshot = {
     work_status: 'completed', questions: [{ id: 'Q1', title: '需求预测' }],
     experiments: [], runs: [{ id: 'run_one', status: 'success' }], results: [], artifacts: [], delivery_stages: {},
@@ -21,7 +21,7 @@ const { hostRenderer } = require('./vueHost.cjs')
     actions: [{ id: 'old', status: 'completed', started_at: 1, finished_at: 2 },
       { id: 'new', status: 'running', started_at: 3, label: '读取实际输出' }],
   } }
-  assert.equal(currentActivity(active.runtime).id, 'new')
+  assert.equal(currentExecution(active.runtime).id, 'new')
   assert.equal(researchExecution(active).current.id, 'new')
   assert.equal(researchHeadline(active, 'in_progress', true), '读取实际输出')
   active.runtime.models = [{ id: 'model', kind: 'model', status: 'sent', label: '研究计算', started_at: 4 }]

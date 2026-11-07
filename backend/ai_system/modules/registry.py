@@ -1,6 +1,7 @@
-"""The only dispatch boundary for research capabilities.
+"""The catalogue and validated handler boundary for research capabilities.
 
-Modules own methods and products. LangGraph owns scheduling/checkpointing only.
+ToolRuntime owns dispatch, receipts and Item lifecycle. Modules own products.
+LangGraph owns scheduling/checkpointing only.
 Registration fails on collisions and unknown capabilities fail closed.
 """
 from dataclasses import dataclass
@@ -62,7 +63,7 @@ class Capability:
     access: Literal['read','write'] = 'write'
 
 
-def activity_inputs(name, inputs):
+def display_inputs(name, inputs):
     """Keep writing metadata without copying manuscripts or replacement text."""
     if not name.startswith('writing.'):
         return inputs
@@ -78,7 +79,7 @@ def activity_inputs(name, inputs):
     return {}
 
 
-def activity_output(name, value):
+def display_output(name, value):
     if not name.startswith('writing.'):
         return value
     if name == 'writing.preview':
@@ -110,41 +111,33 @@ class ModuleRegistry:
         return [{"name": c.name, "module": c.module, "product": c.product, "inputs": c.inputs.model_json_schema()}
                 for c in self._capabilities.values()]
 
+    def get(self, name):
+        return self._capabilities.get(name)
+
     async def invoke(self, request: CapabilityRequest, ctx):
-        capability = self._capabilities.get(request.name)
+        from ai_system.agent.runtime import invoke
+        result = await invoke(ctx, self, request.name, request.inputs)
+        return CapabilityProduct(result.kind, result.value, result.status, result.message)
+
+    async def execute(self, name, inputs, ctx):
+        """Handler/schema boundary. ToolRuntime owns identity and lifecycle."""
+        capability = self.get(name)
         if capability is None:
-            raise ValueError(f"未注册能力：{request.name}")
+            raise ValueError(f"未注册能力：{name}")
         from ai_system.graph.tracing import CURRENT_CAPABILITY
-        token = CURRENT_CAPABILITY.set(request.name)
+        token = CURRENT_CAPABILITY.set(name)
         try:
-            from ai_system.research.views import activity
-            branch=request.inputs.get('branch') or {}
-            task_id=request.inputs.get('task_id') or request.inputs.get('experiment_id') or branch.get('subproblem',{}).get('id')
-            with activity(ctx,request.name,task_id,inputs=activity_inputs(request.name,request.inputs),**({'question_id':request.inputs['question_id']} if request.inputs.get('question_id') else {})) as execution:
-                with capability_span(request.name, capability.module, request.inputs) as span:
-                    result = capability.execute(ctx, capability.inputs.model_validate(request.inputs).model_dump())
-                    if inspect.isawaitable(result):
-                        result = await result
-                    if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
-                        raise TypeError(f"能力产物不符合接口：{request.name}")
-                    if result.execution_status:
-                        execution['status'] = result.execution_status
-                        if result.execution_status != 'completed':
-                            execution.setdefault('error_type','ExecutionIncomplete')
-                            execution.setdefault('message',result.execution_message or '本次操作未完成，已有输出已保留。')
-                    if isinstance(result.value,dict):
-                        execution['output'] = {**execution.get('output',{}), **activity_output(request.name,result.value)}
-                        if result.value.get('question_id'):execution['question_id']=result.value['question_id']
-                        if result.value.get('experiment_id'):execution['experiment_id']=result.value['experiment_id']
-                    if isinstance(result.value,dict) and result.value.get('research_blocked'):
-                        execution.update(status='failed',error_type='ResearchBlocked',message=result.value.get('message'))
-                    if span is not None:
-                        span.end(outputs={'kind': result.kind, 'value': result.value})
+            with capability_span(name, capability.module, inputs) as span:
+                result = capability.execute(ctx, capability.inputs.model_validate(inputs).model_dump())
+                if inspect.isawaitable(result):result = await result
+                if not isinstance(result, CapabilityProduct) or result.kind != capability.product:
+                    raise TypeError(f"能力产物不符合接口：{name}")
+                if span is not None:span.end(outputs={'kind':result.kind,'value':result.value})
+                return result
         finally:
             CURRENT_CAPABILITY.reset(token)
-        return result
 
-    def invoke_sync(self, request: CapabilityRequest, ctx):
+    def execute_internal_sync(self, request: CapabilityRequest, ctx):
         capability = self._capabilities.get(request.name)
         if capability is None:
             raise ValueError(f"未注册能力：{request.name}")
@@ -179,5 +172,5 @@ async def invoke(ctx, name, **inputs):
     return (await capabilities().invoke(CapabilityRequest(name=name, inputs=inputs), ctx)).value
 
 
-def invoke_sync(ctx, name, **inputs):
-    return capabilities().invoke_sync(CapabilityRequest(name=name, inputs=inputs), ctx).value
+def execute_internal_sync(ctx, name, **inputs):
+    return capabilities().execute_internal_sync(CapabilityRequest(name=name, inputs=inputs), ctx).value

@@ -1,363 +1,171 @@
-"""Ordered, durable assistant replies. No second execution store.
-
-Text is checkpointed at most every 500 ms (or 4 KiB), and before every semantic
-boundary. Only committed deltas are published. A hard process loss can discard
-at most the unpublished text buffer. Execution hooks are synchronous: they run
-at the durable activity boundary, never through deferred invalidation events.
-"""
-from services.file_services.workspace_layout import workspace_path
-from contextvars import ContextVar
-from copy import deepcopy
+"""Chat is a projection of durable Agent turns, not a second execution model."""
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
 from uuid import uuid4
-import json
+import logging
 import re
-import sqlite3
-from contextlib import closing
+import time
+from ai_system.agent.context import new_turn
+from ai_system.agent.protocol import MessageItem, NoticeItem
+from ai_system.agent.projection import public_block
+from ai_system.agent.store import AgentStore
 
-TIMELINE = ContextVar('paperagent_conversation_timeline', default=None)
-RESEARCH_SOURCE_REFS = {'research:feedback', 'research:consistency'}
-
-
-def execution_boundary(root, research_id, kind, item):
-    writer = TIMELINE.get()
-    if writer is not None:
-        writer.execution(root, research_id, kind, item)
+# Domain notifications refresh panels. Only authored messages, requests and
+# notices enter the conversation; tool progress comes exclusively from runtime.
+DOMAIN_NOTIFICATIONS = {'main_agent_start','paper_stage','paper_phase','paper_code','paper_solved',
+                        'paper_export','paper_validation','plan_updated','file_changed',
+                        'research_snapshot','research_state','execution_changed',
+                        'call_code_agent','call_writing_agent','word_tool_call'}
 
 
 def public_reply(reply, *, root=None):
-    """Omit retired model-call segments when reading existing conversation files."""
-    if 'segments' not in reply:return reply
-    segments=[s for s in reply['segments'] if s.get('type') != 'execution' or s['ref']['kind'] != 'model']
-    if root is not None:
-        ids=[s['id'] for s in segments if s.get('type')=='execution']
-        details={row['segment_id']:{key:value for key,value in row.items() if key!='segment_id'}
-                 for offset in range(0,len(ids),100)
-                 for row in resolve_executions(root,reply,ids[offset:offset+100])}
-        segments=[{**s,'execution':details[s['id']]} if s['id'] in details else s for s in segments]
-    return {**reply,'segments':segments}
+    if reply.get('message_type') != 'agent_turn':
+        return {k:v for k,v in reply.items() if k not in {'segments','json_blocks'}}
+    if root is None:
+        return reply
+    turn_id = reply['metadata']['turn_id']
+    store = AgentStore(root, read_only=True)
+    items = store.items(root_turn_id=turn_id, limit=100000)
+    events = store.events(turn_id)
+    terminal = next((e for e in reversed(events) if e['method']=='turn/completed' and e['turn_id']==turn_id), None)
+    metadata = {**reply['metadata'], 'event_seq': events[-1]['seq'] if events else 0}
+    if terminal:metadata['status'] = terminal['turn']['status']
+    content = '\n\n'.join(i['text'] for i in items if i['type']=='agentMessage' and i['thread_id']==metadata['thread_id'])
+    return {**reply, 'items':items, 'content':content, 'metadata':metadata}
 
 
-def safe_file(root, value, *, nonempty=False):
-    # Only public workspace products; never expose internal DBs, config or secrets.
-    if root is None or not isinstance(value, str) or '\\' in value: return None
-    path = Path(value)
-    public_internal = value in {'.system/validation.json', '.system/consistency.json'}
-    if path.is_absolute() or (not public_internal and any(p.startswith('.') or p in {'..', 'node_modules'} for p in path.parts)): return None
-    try:
-        target = workspace_path(Path(root), value)
-    except ValueError:
-        return None
-    if not target.is_file(): return None
-    if nonempty and target.stat().st_size == 0: return None
-    if path.suffix.lower() not in {'.md','.txt','.log','.csv','.json','.png','.jpg','.jpeg','.svg','.pdf','.docx','.tex','.bib','.py','.xlsx'}: return None
-    return path.as_posix()
+class TurnWriter:
+    """Persist before publishing. Chat-message storage is a rebuildable index.
 
-
-
-def safe_diagnostic(root, value, limit=400):
-    """Bound existing error_detail output; remove secrets, prompt dumps and paths.
-
-    Activity exceptions already use review_cache.error_detail (validation errors
-    omit input values). Credential patterns cover common authorization and token forms
-    to quoted config values; no raw input/output/config object is projected.
+    Authored token streams flush every 500 ms / 4 KiB. All visible tool changes
+    are already committed by ToolRuntime and are forwarded without re-parsing.
     """
-    if not isinstance(value, str): return ''
-    text = value[:4000]
-    if re.search(r'(?i)(?:system[_ -]?prompt|messages|input_value|api[_-]?key|password)[\"\']?\s*[:=]\s*[\[{]', text):
-        return '错误包含内部请求数据；请检查运行状态或执行输出。'
-    # Tracebacks can echo source lines containing credentials: retain the final
-    # exception summary rather than stack frames or echoed code.
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    exceptions = [line for line in lines if re.match(r'^[A-Za-z_][\w.]*(?:Error|Exception):', line)]
-    if exceptions: text = exceptions[-1]
-    else: text = '；'.join(line for line in lines[:3] if not line.startswith(('Traceback', 'File "')))
-    text = re.sub(r'(?i)https?://[^\s<>\"\']+', '[服务地址]', text)
-    text = re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[已隐藏]', text)
-    text = re.sub(r"(?i)((?:api[_-]?key|access[_-]?token|authorization|sa[_-]?token|password|secret|credential)[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)", r'\1[已隐藏]', text)
-    text = re.sub(r'\bsk-[A-Za-z0-9_-]{8,}', '[已隐藏]', text)
-    if root is not None:text = text.replace(str(Path(root).resolve()) + '/', '')
-    text = re.sub(r'(?<![\w.])(?:[A-Za-z]:[\\/]|/)[^\s<>\"\']+', '[工作区外路径]', text)
-    text = re.sub(r'\.system/[^\s<>\"\']+', '[内部记录]', text)
-    text = re.sub(r'(?i)(?:system[_ -]?prompt|prompt|messages)\s*[:=].*', '[内部请求已隐藏]', text)
-    return text[:limit]
-
-
-def page_range(pages):
-    if not isinstance(pages, list):return ''
-    numbers = sorted({p for p in pages if type(p) is int and p > 0})[:4]
-    groups = []
-    for number in numbers:
-        if groups and number == groups[-1][-1] + 1: groups[-1].append(number)
-        else: groups.append([number])
-    return '、'.join(str(g[0]) if len(g) == 1 else f'{g[0]}–{g[-1]}' for g in groups)
-
-
-def operation_detail(root, item):
-    # Describe recorded inputs and receipts, never invent progress from elapsed time.
-    capability = item.get('capability')
-    inputs, output = item.get('inputs') or {}, item.get('output') or {}
-    if capability == 'writing.preview':
-        pages = page_range(output.get('pages') or inputs.get('pages') or [])
-        parts = [f'第 {pages} 页'] if pages else []
-        if type(output.get('total_pages')) is int: parts.append(f"共 {output['total_pages']} 页")
-        if inputs.get('historical'): parts.append('历史版本')
-        if item.get('status') == 'running':
-            stage = output.get('preview_stage')
-            if stage == 'compiling': parts.append('正在编译 LaTeX')
-            elif stage == 'reading': parts.append('正在读取 PDF 页面')
-        elif item.get('status') == 'completed' and type(output.get('warning_count')) is int:
-            parts.append(f"{output['warning_count']} 条编译警告")
-        return '；'.join(parts)
-    if capability == 'writing.edit':
-        if item.get('status') == 'completed':return '已保存局部修改。' if inputs.get('edit_mode') == 'replace' else '已保存文件。'
-        if item.get('status') == 'running':return '正在替换指定原文。' if inputs.get('edit_mode') == 'replace' else '正在保存文件。'
-    if capability == 'writing.use_asset':
-        source = safe_file(root, inputs.get('source'))
-        if source:return f"来源：{source}" + ('；已绑定固定版本。' if item.get('status') == 'completed' else '')
-    if capability == 'writing.propose_edits' and output.get('status') == 'pending':
-        return '修改建议已生成，等待接受；正文尚未修改。'
-    if capability == 'research.list_files' and type(output.get('total')) is int:
-        return f"已列出 {len(output.get('files', []))} 个文件，共 {output['total']} 个。"
-    if capability == 'research.search_files' and 'matches' in output:
-        return f"本批搜索找到 {len(output['matches'])} 个匹配文件。"
-    if capability == 'research.list_skills' and isinstance(output.get('skills'), list):
-        return f"已找到 {len(output['skills'])} 项可用研究技能。"
-    if capability == 'research.read_skill' and isinstance(output.get('name'), str):
-        return '已读取研究技能：' + safe_diagnostic(root, output['name'], limit=160) + '。'
-    if capability == 'research.delegate':
-        return safe_diagnostic(root, inputs.get('task', ''), limit=240)
-    if capability in {'read_file', 'research.read_artifact'}:
-        total = output.get('total_chars')
-        if total is not None:return f"已读取 {len(output.get('excerpt', ''))} 个字符，文件共 {total} 个字符。"
-        start, size = inputs.get('start'), inputs.get('limit')
-        if type(start) is int and type(size) is int:return f'从第 {start} 个字符起读取，最多 {size} 个字符。'
-    if capability == 'experience.candidates' and 'candidates' in output:
-        return f"已更新经验索引，共 {output['candidates']} 项。"
-    if capability == 'record_results' and 'artifact_refs' in output:
-        return f"已登记 {len(output['artifact_refs'])} 项结果。" + (f"另有 {output['rejected']} 项未通过核对。" if output.get('rejected') else '')
-    if capability == 'record_figure':return output.get('caption', '')
-    if capability == 'writing.save_source' and 'files' in output:
-        return '已保存：' + '、'.join(output['files'])
-    if capability == 'literature.collect':return safe_diagnostic(root, inputs.get('query', ''))
-    return ''
-
-
-def run_files(root, fs, run_id):
-    """Prefer immutable published paths and collapse aliases of the same artifact."""
-    files = []; seen = set()
-    entries = sorted(fs._manifest.get('files', {}).items(),
-                     key=lambda pair: (not pair[0].startswith('outputs/research/'), pair[0]))
-    for value, meta in entries:
-        archive = meta.get('archive_path')
-        if meta.get('source_run') != run_id or meta.get('visibility') != 'user' or not archive:continue
-        path = safe_file(root, value)
-        if path and archive not in seen:
-            seen.add(archive); files.append(path)
-    return files
-
-
-def execution_projection(root, research_id, item, *, fs=None):
-    from ai_system.research.views import LABELS
-    row = {key: item[key] for key in ('action_id','observation_id','question_id','experiment_id','parent_call_id',
-            'finished_at','run_id','subject','task_id','phase','error_type') if item.get(key) is not None}
-    row.update(id=item['id'], research_id=research_id, kind='activity',
-               capability=item.get('capability'),
-               label=item.get('display_label') or LABELS.get(item.get('capability'), '执行步骤'),
-               status=item.get('status', 'unknown'), started_at=item.get('started_at'))
-    row['detail'] = operation_detail(root, item)
-    output = item.get('output') or {}
-    if item.get('capability') == 'writing.preview':
-        if output.get('compiled'): row['label'] = '编译并预览论文 PDF'
-        row['warnings'] = [safe_diagnostic(root, warning) for warning in output.get('warnings', [])[:20] if isinstance(warning, str)]
-    if item.get('error_type') or row['status'] in {'failed','error'}:
-        reason = safe_diagnostic(root, item.get('message')) if item.get('error_type') else ''
-        row['message'] = reason or '未记录具体错误；已有产物保留，可查看执行输出。'
-    inputs = item.get('inputs') or {}
-    file = safe_file(root, item.get('display_file') or output.get('path') or inputs.get('path') or inputs.get('destination'))
-    if file:
-        row['file'] = file
-        row['label'] += ' · ' + Path(file).name
-    run_id = item.get('run_id')
-    if root is not None and isinstance(run_id, str) and re.fullmatch(r'[A-Za-z0-9_-]+', run_id):
-        from services.file_services.workspace_fs import WorkspaceFS
-        fs = fs or WorkspaceFS(Path(root))
-        info = fs.get_run_info(run_id) or {}
-        row['output_file'] = safe_file(root, info.get('stdout'), nonempty=True)
-        row['script_file'] = safe_file(root, info.get('input'))
-        row['error_file'] = safe_file(root, info.get('stderr'), nonempty=True)
-        row['files'] = run_files(root, fs, run_id)
-        if row['files'] and not row['detail'] and row['status'] != 'running':
-            row['detail'] = f"已保留 {len(row['files'])} 个结果文件。"
-    if item.get('capability') in {'run_python','research.run_python'} and isinstance(output.get('output_tail'), str):
-        row['output_tail'] = output['output_tail'][-6000:]
-    refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
-    row['result_ids'] = [r for r in refs if isinstance(r, str) and re.fullmatch(r'[RF]\d+', r)]
-    # Raw requests and inherited planning purposes are not user-facing progress.
-    return row
-
-
-def public_block(root, block):
-    kind, content = block.get('type', 'unknown'), block.get('content')
-    if kind == 'main_agent_error':
-        content = safe_diagnostic(root, content if isinstance(content,str) else (content or {}).get('message')) or '操作失败，未记录具体原因。'
-    elif kind in {'call_code_agent', 'call_writing_agent', 'word_tool_call'}:
-        content = '操作记录已保存。'
-    if kind == 'research_context' and isinstance(content, dict):
-        content = {**{k: content[k] for k in ('schema_version','work_id','subproblem_id','truncated') if k in content},
-                   'research_id': content.get('research_id'),
-                   'files': [p for p in content.get('files', []) if isinstance(p, str) and (p in RESEARCH_SOURCE_REFS or safe_file(root, p))],
-                   'result_ids': [r for r in content.get('result_ids', []) if isinstance(r,str) and re.fullmatch(r'[RF]\d+',r)]}
-    elif kind == 'paper_phase' and isinstance(content, dict):
-        content = {key: content[key] for key in ('stage', 'status', 'note') if isinstance(content.get(key), str)}
-        if 'note' in content:content['note'] = safe_diagnostic(root, content['note'])
-    elif not isinstance(content, str):
-        content = {key: content[key] for key in ('message','summary','reason','status','ok','success')
-                   if isinstance(content,dict) and isinstance(content.get(key), (str,bool))}
-    return {'type': kind, 'content': content}
-
-
-class ReplyWriter:
-    def __init__(self, history, work_id, chat_task_id, root, publish):
+    def __init__(self, history, work_id, chat_task_id, root, publish, *, user_message=None):
         self.history, self.work_id, self.root, self.publish = history, work_id, Path(root), publish
         self.lock = RLock()
-        self.dirty = {}
+        self.pending = {}
+        self.active_text = None
         self.pending_chars = 0
-        self.reply = {'id': uuid4().hex, 'role': 'assistant', 'content': '',
-                      'timestamp': datetime.now().isoformat(), 'message_type': 'timeline',
-                      'segments': [], 'json_blocks': [],
-                      'metadata': {'system_type': 'brain', 'chat_task_id': chat_task_id,
-                                   'reply_id': None, 'revision': 0, 'status': 'running'}}
-        self.reply['metadata']['reply_id'] = self.reply['id']
-        self.flush(force=True)
+        turn_id = uuid4().hex
+        self.reply = {'id':turn_id,'role':'assistant','content':'','timestamp':datetime.now().isoformat(),
+                      'message_type':'agent_turn','items':[],
+                      'metadata':{'system_type':'brain','chat_task_id':chat_task_id,'reply_id':turn_id,
+                                  'thread_id':work_id,'turn_id':turn_id,'revision':1,'event_seq':0,'status':'running'}}
+        # Save the turn locator before events, so a crash cannot orphan a reply.
+        self.history.upsert_reply(self.work_id, self.reply)
+        self.turn = new_turn(root, work_id, turn_id=turn_id, publish=self.accept, lock=self.lock)
+        if user_message:
+            self.message(user_message['content'], role='userMessage', identity='user:'+turn_id)
 
     @property
-    def id(self): return self.reply['id']
+    def id(self):return self.reply['id']
+
+    def accept(self, event):
+        with self.lock:
+            metadata = self.reply['metadata']
+            if event['seq'] <= metadata['event_seq']:return
+            item = event.get('item')
+            if item:
+                rows = self.reply['items']
+                index = next((n for n,row in enumerate(rows) if row['id']==item['id']),None)
+                if index is None:rows.append(item)
+                else:rows[index] = item
+                if event['method']=='item/started' and item['id']!=self.active_text and self.active_text:
+                    self.pending[self.active_text]['sealed'] = True
+                    self.active_text = None
+            if event['method']=='turn/completed' and event['turn_id']==metadata['turn_id']:
+                metadata['status'] = event['turn']['status']
+            metadata['event_seq'] = event['seq']
+            metadata['revision'] += 1
+            self.reply['content'] = '\n\n'.join(i['text'] for i in self.reply['items']
+                if i['type']=='agentMessage' and i['thread_id']==metadata['thread_id'])
+            # The event log is authoritative if this cache or the socket fails.
+            try:self.history.upsert_reply(self.work_id, self.reply)
+            except Exception:logging.getLogger(__name__).exception('Chat turn projection will rebuild from Items')
+            self.publish({'reply_id':self.id,'chat_task_id':metadata['chat_task_id'],
+                          'thread_id':metadata['thread_id'],'turn_id':metadata['turn_id'],'event':event})
+
+    def message(self, text, *, role='agentMessage', phase='commentary', identity=None):
+        with self.lock:
+            if self.reply['metadata']['status']!='running' or not text.strip():return
+            self.flush(seal=True)
+            item = MessageItem(id=identity or uuid4().hex,thread_id=self.turn.thread_id,turn_id=self.turn.turn_id,
+                               type=role,phase=phase,text=text.strip(),started_at=time.time()).model_dump(exclude_none=True)
+            if self.turn.store.get_item(item['id']):return
+            self.turn.put(item,'item/started')
+            item.update(status='completed',finished_at=time.time())
+            self.turn.put(item,'item/completed')
 
     def text(self, text):
         with self.lock:
-            if self.reply['metadata']['status'] != 'running': return
-            rows = self.reply['segments']
-            if not rows or rows[-1]['type'] != 'text' or rows[-1].get('phase') == 'commentary':
-                rows.append({'id': uuid4().hex, 'type': 'text', 'text': ''})
-            rows[-1]['text'] += text
-            self.reply['content'] += text
-            self.dirty[rows[-1]['id']] = rows[-1]
+            if self.reply['metadata']['status']!='running' or not text:return
+            if self.active_text is None:
+                item = MessageItem(id=uuid4().hex,thread_id=self.turn.thread_id,turn_id=self.turn.turn_id,
+                                   type='agentMessage',phase='final_answer',text='',started_at=time.time()).model_dump(exclude_none=True)
+                self.active_text = item['id']
+                self.pending[item['id']] = {'item':item,'sealed':False,'dirty':False}
+                self.turn.put(item,'item/started')
+            pending = self.pending[self.active_text]
+            pending['item']['text'] += text
+            pending['dirty'] = True
             self.pending_chars += len(text)
-            if self.pending_chars >= 4096: self.flush()
+            if self.pending_chars>=4096:self.flush()
 
     def commentary(self, content):
-        # One complete authored message per stable ID; never append across tools
-        # or another experiment's commentary. Persist before notifying clients.
-        if not isinstance(content, dict): return
-        identity, text = content.get('id'), content.get('text')
-        if not isinstance(identity, str) or not re.fullmatch(r'[a-f0-9]{64}', identity): return
-        if not isinstance(text, str) or not text.strip(): return
-        with self.lock:
-            if self.reply['metadata']['status'] != 'running': return
-            key = 'commentary:' + identity
-            if any(row['id'] == key for row in self.reply['segments']): return
-            row = {'id': key, 'type': 'text', 'phase': 'commentary', 'text': text.strip(),
-                   'scope': str(content.get('scope') or '')[:160]}
-            self.reply['segments'].append(row)
-            self.reply['content'] += ('\n\n' if self.reply['content'] else '') + row['text']
-            self.dirty[key] = row
-            self.flush()
+        if not isinstance(content,dict):return
+        identity,text = content.get('id'),content.get('text')
+        if not isinstance(identity,str) or not re.fullmatch(r'[a-f0-9]{64}',identity):return
+        if isinstance(text,str):self.message(text,identity=self.id+':commentary:'+identity)
 
     def block(self, block):
-        if block.get('type') == 'research_commentary':
+        name = block.get('type')
+        if name=='research_commentary':
             self.commentary(block.get('content'))
             return
+        if name in DOMAIN_NOTIFICATIONS:return
         with self.lock:
-            if self.reply['metadata']['status'] != 'running': return
-            block = public_block(self.root, block)
-            self.reply['json_blocks'].append(block)
-            rows = self.reply['segments']
-            # The last model message can be both public commentary and the
-            # final answer. Replace it in place so live deltas and replay show
-            # one copy while keeping the completion event.
-            previous = rows[-1] if rows else None
-            duplicate = (block['type'] == 'main_agent_complete' and isinstance(block['content'], str)
-                         and previous and previous.get('phase') == 'commentary'
-                         and previous.get('text', '').strip() == block['content'].strip())
-            row = {'id': previous['id'] if duplicate else uuid4().hex, 'type': 'event', 'block': block}
-            if block['type'] == 'main_agent_complete' and isinstance(block['content'], str):
-                if not duplicate:
-                    self.reply['content'] += ('\n\n' if self.reply['content'] else '') + block['content']
-            if duplicate: rows[-1] = row
-            else: rows.append(row)
-            self.dirty[row['id']] = row
-            self.flush()
+            if self.reply['metadata']['status']!='running':return
+            self.flush(seal=True)
+            block=public_block(self.root,block)
+            if name=='main_agent_complete' and isinstance(block['content'],str):
+                previous=next((i for i in reversed(self.reply['items']) if i['thread_id']==self.turn.thread_id),None)
+                if previous and previous['type']=='agentMessage' and previous['text'].strip()==block['content'].strip():return
+                self.message(block['content'],phase='final_answer')
+                return
+            item=NoticeItem(id=uuid4().hex,thread_id=self.turn.thread_id,turn_id=self.turn.turn_id,
+                            type='inputRequest' if name in {'paper_confirm','paper_clarification','main_agent_confirm'} else 'notice',
+                            name=name or 'notice',content=block['content'] or '',started_at=time.time()).model_dump(exclude_none=True)
+            self.turn.put(item,'item/started')
+            item.update(status='completed',finished_at=time.time())
+            self.turn.put(item,'item/completed')
 
-    def execution(self, root, research_id, kind, item):
-        if kind != 'activity':return
+    def flush(self, *, seal=False):
         with self.lock:
-            if Path(root).resolve() != self.root.resolve() or self.reply['metadata']['status'] != 'running': return
-            detail = execution_projection(root, research_id, item)
-            ref = {'research_id': research_id, 'kind': kind, 'id': detail['id']}
-            rows = self.reply['segments']
-            row = next((r for r in rows if r.get('ref') == ref), None)
-            if row is None:
-                row = {'id': uuid4().hex, 'type': 'execution', 'ref': ref}
-                rows.append(row)
-            row['execution'] = detail
-            self.dirty[row['id']] = row
-            self.flush()
+            if seal:self.active_text=None
+            for identity,pending in list(self.pending.items()):
+                item=pending['item']
+                if seal or pending['sealed']:
+                    item.update(status='completed',finished_at=time.time())
+                    self.turn.put(item,'item/completed')
+                    del self.pending[identity]
+                elif pending['dirty']:
+                    self.turn.put(item,'item/agentMessage/delta')
+                    pending['dirty']=False
+            self.pending_chars=0
 
-    def flush(self, force=False):
+    def finish(self,status,notice=None):
         with self.lock:
-            if not self.dirty and not force: return
-            self.reply['metadata']['revision'] += 1
-            self.history.upsert_reply(self.work_id, self.reply)
-            update = {'reply_id': self.id, 'chat_task_id': self.reply['metadata']['chat_task_id'],
-                      'revision': self.reply['metadata']['revision'], 'status': self.reply['metadata']['status'],
-                      'segments': deepcopy(list(self.dirty.values()))}
-            self.dirty.clear()
-            self.pending_chars = 0
-            self.publish(update)
-
-    def finish(self, status, notice=None):
-        with self.lock:
-            if self.reply['metadata']['status'] != 'running': return
-            if notice: self.text('\n\n' + notice)
-            for row in self.reply['segments']:
-                detail = row.get('execution')
-                if detail and not detail.get('finished_at') and detail['status'] in {'running','sent','http_response'}:
-                    detail['status'] = 'interrupted'
-                    self.dirty[row['id']] = row
-            self.reply['metadata']['status'] = status
-            self.flush(force=True)
+            if self.reply['metadata']['status']!='running':return
+            if notice:self.message(notice)
+            self.flush(seal=True)
+            state = 'completed' if status in {'completed','done'} else 'failed' if status in {'failed','error'} else 'interrupted'
+            self.turn.finish(state)
 
 
-def resolve_executions(root, reply, ids):
-    """Resolve only refs actually in this authorized reply, including old journal rows."""
-    root = Path(root)
-    path = workspace_path(root, '.system/research.sqlite')
-    if not path.is_file(): return []
-    references = {r['id']: r for r in reply.get('segments', []) if r.get('type') == 'execution' and r['ref']['kind'] == 'activity'}
-    from services.file_services.workspace_fs import WorkspaceFS
-    fs = WorkspaceFS(root)
-    selected = [references[identity] for identity in dict.fromkeys(ids) if identity in references]
-    if not selected:return []
-    result = []
-    with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as db:
-        refs = {(s['ref']['research_id'],s['ref']['id']) for s in selected}
-        records = {(rid,identity):payload for rid,identity,payload in db.execute(
-            'SELECT research_id,id,payload FROM research_activity WHERE (research_id,id) IN ('+
-            ','.join('(?,?)' for _ in refs)+')',tuple(value for ref in refs for value in ref))}
-        for segment in selected:
-            segment_id = segment['id']
-            ref = segment['ref']
-            payload = records.get((ref['research_id'],ref['id']))
-            if payload is None:
-                raw = db.execute("SELECT payload FROM journal WHERE research_id=? AND kind IN ('activity_started','activity_finished') AND json_extract(payload,'$.id')=? ORDER BY seq DESC LIMIT 1",
-                                 (ref['research_id'], ref['id'])).fetchone()
-                payload = raw[0] if raw else None
-            detail = execution_projection(root, ref['research_id'], json.loads(payload),fs=fs) if payload else segment.get('execution')
-            if detail:
-                if reply.get('metadata', {}).get('status') != 'running' and not detail.get('finished_at'):
-                    detail['status'] = 'interrupted'
-                result.append({'segment_id': segment_id, **detail})
-    return result
+def resolve_items(root, reply, identities):
+    """Membership in the authorized root turn is the only detail lookup boundary."""
+    turn_id = reply.get('metadata',{}).get('turn_id')
+    if not turn_id:return []
+    allowed = {item['id']:item for item in AgentStore(root,read_only=True).items(root_turn_id=turn_id,limit=100000)}
+    return [allowed[identity] for identity in dict.fromkeys(identities) if identity in allowed]

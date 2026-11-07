@@ -73,7 +73,7 @@ predictions.to_csv('outputs/intermediate/predictions.csv',index=False)
     assert all(not state[key] for key in ('questions','experiments','executions','artifacts','claims'))
     assert len(ctx.fs._manifest['runs'])==1
     assert (tmp_path/'outputs/intermediate/predictions.csv').read_text().startswith('x,y,baseline,linear')
-    assert not REMOVED.intersection(a['capability'] for a in state['activity'])
+    assert not REMOVED.intersection(a.get('tool_name') for a in state['items'])
 
 
 def test_skill_reads_obey_user_selection_and_never_create_an_experiment(tmp_path):

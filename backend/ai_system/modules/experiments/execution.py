@@ -146,14 +146,16 @@ async def recover_outputs(ctx):
               ((inventory.get(rid) or {}).get('submission_state') in {'submitting', 'unknown'} or
                (inventory.get(rid) or {}).get('status') in {'starting', 'running'}))}
     if pending:
-        from ai_system.research.views import activity
-        with activity(ctx,'retry_outputs'):
+        from ai_system.agent.runtime import dispatch, ToolInvocation
+        from uuid import uuid4
+        async def reconcile():
             kernel=ctx.kernels.get('research')
             for _ in pending:
                 run_id=await kernel.retry_outputs()
                 if run_id:
                     await publish_outputs(ctx,[run_id])
                     owned.discard(run_id)
+        await dispatch(ctx, ToolInvocation('retry_outputs', uuid4().hex, {}), reconcile)
     indexed={a['payload'].get('path') for a in snapshot['artifacts'].values()}
     missing=[]
     for rid in owned:
@@ -179,26 +181,23 @@ def build_tools(
     async def read_file(path: str, start: int = 0, limit: int = 12000) -> str:
         """读取工作区已有文本文件，不重跑计算；使用start/limit分段读取。"""
         if start < 0 or not 1 <= limit <= 24000:return '读取范围无效'
-        from ai_system.research.views import activity
-        with activity(ctx,'read_file',subproblem_id,display_file=path,inputs={'path':path,'start':start,'limit':limit}) as operation:
-            if ctx.fs.abs(path).suffix.lower() in {'.png', '.jpg', '.jpeg', '.pdf', '.xlsx', '.zip'}:
-                return f'这是二进制文件，可从文件面板预览或下载：{path}；不要按文本读取，也不需要重新生成。'
-            text=ctx.fs.read_text(path)
-            operation['output']={'total_chars':len(text),'excerpt':text[start:start+limit]}
-            return text[start:start+limit]
+        from ai_system.agent.runtime import tool_metadata
+        if ctx.fs.abs(path).suffix.lower() in {'.png', '.jpg', '.jpeg', '.pdf', '.xlsx', '.zip'}:
+            return f'这是二进制文件，可从文件面板预览或下载：{path}；不要按文本读取，也不需要重新生成。'
+        text=ctx.fs.read_text(path)
+        tool_metadata(ctx,total_chars=len(text),excerpt=text[start:start+limit])
+        return text[start:start+limit]
 
     async def search_literature(query: str, information_need: str = "") -> str:
         """为当前实验的明确信息需求检索文献；遵守项目外部检索设置，保存来源。"""
         from ai_system.research.citations import literature_root
         from ai_system.research.literature import LiteratureStore, LiteratureService
-        from ai_system.research.views import activity
+        from ai_system.agent.runtime import tool_metadata
         root=literature_root(ctx)
         if LiteratureStore(root).policy()=='off':return '项目已关闭外部检索。'
-        with activity(ctx,'literature.collect',subproblem_id) as operation:
-            operation['inputs']={'query':query,'information_need':information_need}
-            value=await LiteratureService(root).search(query,limit=3,fetch_open_access=True)
-            operation['output']=value
-            return json.dumps(value,ensure_ascii=False)
+        value=await LiteratureService(root).search(query,limit=3,fetch_open_access=True)
+        tool_metadata(ctx,**value)
+        return json.dumps(value,ensure_ascii=False)
 
     async def run_python(code: str, title: str = '') -> str:
         """在沙箱独立 Python 进程中执行代码，返回落盘日志、错误和自动保存的图片。
@@ -210,71 +209,72 @@ def build_tools(
         code = strip_template_tokens(code)
         if is_placeholder(code):
             return PLACEHOLDER_REPLY
-        from ai_system.research.views import activity
+        from ai_system.agent.runtime import update_tool
         publication_note = ''
-        with activity(ctx,'run_python',subproblem_id,reuse_parent='research.run_python',
-                      inputs={'code':code},display_label=' '.join(title.split())[:60],phase='preparing') as operation:
-            import time
-            from ai_system.research.views import activity_progress
-            last_push = 0.0
-            async def progress(event):
-                nonlocal last_push
-                operation['run_id'] = event['run_id']
-                operation['phase'] = 'delivery' if event['type']=='finished' else 'compute' if event['type'] in {'running','output'} else 'preparing'
-                if on_run:on_run(event['run_id'])
-                output = operation.setdefault('output', {})
-                if event['type'] == 'output':
-                    output['output_tail'] = (output.get('output_tail', '') + event['text'])[-6000:]
-                now = time.monotonic()
-                if event['type'] != 'output' or now - last_push >= 1:
-                    activity_progress(ctx, operation)
-                    last_push = now
-            # A pending transfer is retried before accepting another computation.
-            if getattr(kernel,'pending_run',None):
-                recovered=await kernel.retry_outputs()
-                if recovered:await publish_outputs(ctx,[recovered])
-            result = await kernel.execute(code, on_event=progress)
-            operation['phase'] = 'delivery'
-            if on_run:on_run(result.run_id)
-            if result.delivery_error and hasattr(kernel,'retry_outputs'):
-                for _ in range(2):
-                    try:
-                        await kernel.retry_outputs()
-                        result.delivery_error=None
-                        info=ctx.fs.get_run_info(result.run_id) or {}
-                        result.files=info.get('files',result.files)
-                        if info.get('execution_mode') == 'process' and info.get('process_receipt'):
-                            result.ok = info.get('status') == 'success'
-                            result.error = info.get('error')
-                            result.timed_out = info.get('status') == 'timeout'
-                            result.failure_kind = info.get('failure_kind')
-                            result.exit_code = info.get('exit_code')
-                            result.duration_seconds = info.get('duration_seconds')
-                            logs = [(ctx.fs.run_dir(result.run_id) / (name + '.log')).read_text(encoding='utf-8')
-                                    for name in ('stdout', 'stderr')]
-                            result.stdout = '\n'.join(filter(None, logs))[-20000:]
-                        break
-                    except (OSError,ValueError,RuntimeError,TimeoutError):
-                        pass
+        progress_state = {'display_label':' '.join(title.split())[:60], 'phase':'preparing'}
+        update_tool(ctx, **progress_state)
+        import time
+        from ai_system.agent.runtime import update_tool
+        last_push = 0.0
+        async def progress(event):
+            nonlocal last_push
+            progress_state['run_id'] = event['run_id']
+            progress_state['phase'] = 'delivery' if event['type']=='finished' else 'compute' if event['type'] in {'running','output'} else 'preparing'
+            if on_run:on_run(event['run_id'])
+            output = progress_state.setdefault('output', {})
+            if event['type'] == 'output':
+                output['output_tail'] = (output.get('output_tail', '') + event['text'])[-6000:]
+            now = time.monotonic()
+            if event['type'] != 'output' or now - last_push >= 1:
+                update_tool(ctx, **progress_state)
+                last_push = now
+        # A pending transfer is retried before accepting another computation.
+        if getattr(kernel,'pending_run',None):
+            recovered=await kernel.retry_outputs()
+            if recovered:await publish_outputs(ctx,[recovered])
+        result = await kernel.execute(code, on_event=progress)
+        progress_state['phase'] = 'delivery'
+        if on_run:on_run(result.run_id)
+        if result.delivery_error and hasattr(kernel,'retry_outputs'):
+            for _ in range(2):
+                try:
+                    await kernel.retry_outputs()
+                    result.delivery_error=None
+                    info=ctx.fs.get_run_info(result.run_id) or {}
+                    result.files=info.get('files',result.files)
+                    if info.get('execution_mode') == 'process' and info.get('process_receipt'):
+                        result.ok = info.get('status') == 'success'
+                        result.error = info.get('error')
+                        result.timed_out = info.get('status') == 'timeout'
+                        result.failure_kind = info.get('failure_kind')
+                        result.exit_code = info.get('exit_code')
+                        result.duration_seconds = info.get('duration_seconds')
+                        logs = [(ctx.fs.run_dir(result.run_id) / (name + '.log')).read_text(encoding='utf-8')
+                                for name in ('stdout', 'stderr')]
+                        result.stdout = '\n'.join(filter(None, logs))[-20000:]
+                    break
+                except (OSError,ValueError,RuntimeError,TimeoutError):
+                    pass
 
-            # Publish the run before its terminal timeline event resolves file links.
-            try:
-                await publish_outputs(ctx,[result.run_id])
-            except (OSError, ValueError) as exc:
-                publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，系统将重试同步。'
-                ctx.fs.get_run_info(result.run_id)['publication_error'] = publication_note
-                ctx.fs._save_manifest()
-            status='interrupted' if result.delivery_error or publication_note or result.failure_kind=='transport_unknown' else 'completed' if result.ok else 'failed'
-            operation.update(run_id=result.run_id,status=status,
-                output={**operation.get('output', {}),'output_tail':operation.get('output',{}).get('output_tail',result.stdout[-6000:]),
-                        'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
-            if result.delivery_error or publication_note:
-                operation.update(error_type='DeliveryIncomplete',message='计算已结束，文件交付未完成；已有结果保留，请重试文件同步。')
-            if result.recovery_note:
-                operation['message'] = result.recovery_note
-            if not result.ok:
-                operation.update(error_type='TimeoutError' if result.timed_out else 'SandboxLost' if result.failure_kind=='sandbox_lost' else 'PythonExecutionError',
-                                 message=result.error or result.recovery_note)
+        # Publish the run before its terminal timeline event resolves file links.
+        try:
+            await publish_outputs(ctx,[result.run_id])
+        except (OSError, ValueError) as exc:
+            publication_note = f'文件交付未完成：{exc}。计算结果已保留，不要重算，系统将重试同步。'
+            ctx.fs.get_run_info(result.run_id)['publication_error'] = publication_note
+            ctx.fs._save_manifest()
+        status='interrupted' if result.delivery_error or publication_note or result.failure_kind=='transport_unknown' else 'completed' if result.ok else 'failed'
+        progress_state.update(run_id=result.run_id,status=status,
+            output={**progress_state.get('output', {}),'output_tail':progress_state.get('output',{}).get('output_tail',result.stdout[-6000:]),
+                    'ok':result.ok,'run_id':result.run_id, 'files':result.files, 'delivery_error': result.delivery_error, 'failure_kind': result.failure_kind})
+        if result.delivery_error or publication_note:
+            progress_state.update(error_type='DeliveryIncomplete',message='计算已结束，文件交付未完成；已有结果保留，请重试文件同步。')
+        if result.recovery_note:
+            progress_state['message'] = result.recovery_note
+        if not result.ok:
+            progress_state.update(error_type='TimeoutError' if result.timed_out else 'SandboxLost' if result.failure_kind=='sandbox_lost' else 'PythonExecutionError',
+                             message=result.error or result.recovery_note)
+        update_tool(ctx, **progress_state)
         run_log.append({"run_id": result.run_id, "code": code, "ok": result.ok,
                         "delivery_error":result.delivery_error or publication_note})
         await ctx.events.emit(
@@ -304,14 +304,23 @@ def build_tools(
         return '文件同步完成：' + str(files)
 
     from functools import wraps
+    from inspect import signature
     def make_tool(fn):
         @wraps(fn)
         async def run(*args,**kwargs):
-            try:return await fn(*args,**kwargs)
-            except (ValueError,KeyError,FileNotFoundError) as exc:
-                from ai_system.research.review_cache import error_detail
-                raise ToolException(error_detail(exc)) from exc
-        return StructuredTool.from_function(coroutine=run,name=fn.__name__,handle_tool_error=True,handle_validation_error=str)
+            from ai_system.agent.context import CURRENT_TOOL
+            from ai_system.agent.runtime import dispatch, ToolInvocation
+            from uuid import uuid4
+            owner = CURRENT_TOOL.get()
+            # A registry call or model adapter already owns this invocation.
+            if owner is not None and owner.ctx is ctx:
+                return await fn(*args,**kwargs)
+            inputs = dict(signature(fn).bind(*args, **kwargs).arguments)
+            result = await dispatch(ctx, ToolInvocation(fn.__name__,uuid4().hex,inputs,
+                                    'read' if fn.__name__ in {'read_file','search_literature'} else 'write'),
+                                    lambda: fn(*args,**kwargs))
+            return result.value
+        return StructuredTool.from_function(coroutine=run,name=fn.__name__)
     tools = [make_tool(run_python),make_tool(read_file),make_tool(search_literature),make_tool(retry_outputs)]
     return tools
 

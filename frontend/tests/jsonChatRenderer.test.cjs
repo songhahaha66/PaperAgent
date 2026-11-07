@@ -1,111 +1,41 @@
-const assert = require('node:assert/strict')
-const { loadModule, vue, flush } = require('./moduleHarness.cjs')
-const { hostRenderer } = require('./vueHost.cjs')
-const text = (node) => [node.text || '', ...(node.children || []).map(text)].join('')
-;(async () => {
-  const state = vue.reactive({
-    messages: [
-      {
-        id: 'm1',
-        role: 'assistant',
-        content: '',
-        datetime: '',
-        avatar: '',
-        isStreaming: true,
-        json_blocks: [
-          { type: 'call_exec_py', content: 'print(1)' },
-          { type: 'future_tool', content: { internal: 'raw-content' } },
-          { type: 'word_tool_error', content: '无法写入文件' },
-        ],
-      },
-    ],
-    workStatus: 'in_progress',
-  })
-  const module = await loadModule(
-    'src/components/JsonChatRenderer.vue',
-    {
-      vue,
-      '@/components/MarkdownRenderer.vue': {
-        default: { props: ['content'], setup: (props) => () => vue.h('div', {}, props.content) },
-      },
-    },
-    {},
-    true,
-  )
-  const host = hostRenderer(),
-    events = []
-  const app = host.renderer.createApp({
-    render: () =>
-      vue.h(module.default, {
-        ...state,
-        onOpenProgress: () => events.push('progress'),
-        onConfirmPlan: () => events.push('confirm'),
-      }),
-  })
-  app.component('t-icon', { render: () => null })
-  app.mount(host.root)
-  await flush()
-  const header = (id) =>
-    host.find((n) => n.kind === 'button' && n.props?.['aria-controls'] === `event-m1-legacy-${id}`)
-  assert.match(text(header(0)), /执行分析代码/)
-  assert.doesNotMatch(text(header(0)), /Type:|call_exec_py|print/)
-  assert.equal(header(0).props['aria-expanded'], false)
-  assert.match(text(header(1)), /执行记录/)
-  assert.doesNotMatch(text(header(1)), /future_tool|raw-content/)
-  assert.equal(header(1).props['aria-expanded'], false)
-  assert.equal(header(2).props['aria-expanded'], true, 'failures start expanded')
-  assert.match(text(header(2)), /需要处理/)
-  header(0).props.onClick()
-  await flush()
-  assert.equal(
-    header(0).props['aria-expanded'],
-    true,
-    'a real button provides native keyboard activation',
-  )
-  state.messages[0].json_blocks[0].content += '\nprint(2)'
-  state.messages[0].json_blocks.push({ type: 'exec_py', content: '2' })
-  await flush()
-  assert.equal(header(0).props['aria-expanded'], true, 'stream updates preserve a manual expansion')
-  header(0).props.onClick()
-  await flush()
-  state.messages = [
-    { ...state.messages[0], json_blocks: state.messages[0].json_blocks.map((b) => ({ ...b })) },
-  ]
-  await flush()
-  assert.equal(
-    header(0).props['aria-expanded'],
-    false,
-    'replacing streaming payloads preserves manual collapse',
-  )
-  const action = (label) => host.find((n) => n.kind === 'button' && text(n).trim() === label)
-  assert.equal(action('查看运行状态'),undefined)
-  assert.deepEqual(events, [])
-  state.messages[0].isStreaming = false
-  state.messages[0].json_blocks.push({ type: 'confirm', content: '请确认计划' })
-  await flush()
-  assert.equal(
-    !!action('继续研究'),
-    false,
-    'an event alone cannot authorize a stale confirmation',
-  )
-  state.workStatus = 'waiting'
-  await flush()
-  action('继续研究').props.onClick()
-  assert.equal(events.at(-1), 'confirm')
-  state.messages.push({ id: 'm2', role: 'user', content: '已确认', datetime: '', avatar: '' })
-  await flush()
-  assert.equal(!!action('继续研究'), false, 'historical decisions cannot be submitted again')
-  state.messages[0].json_blocks = [
-    { type: 'paper_analysis', content: '分析' },
-    { type: 'future_tool', content: '不要丢掉未知记录' },
-  ]
-  await flush()
-  assert.match(text(host.root), /执行记录/, 'mixed pipeline messages retain unknown records')
+const assert=require('node:assert/strict')
+const {loadModule,vue,flush}=require('./moduleHarness.cjs')
+const {hostRenderer}=require('./vueHost.cjs')
+const text=n=>n.kind==='comment'?'':[n.text||'',...(n.children||[]).map(text)].join('')
+;(async()=>{
+  const component=await loadModule('src/components/JsonChatRenderer.vue',{
+    vue,
+    '@/components/MarkdownRenderer.vue':{default:{props:['content'],setup:p=>()=>vue.h('div',{class:'markdown'},p.content)}},
+    './ConversationOperations.vue':{default:{props:['operations'],setup:p=>()=>vue.h('aside',{},p.operations.map(i=>i.type==='plan'?'更新研究计划':i.label).join(' '))}},
+  },{},true)
+  const base={thread_id:'lead',turn_id:'turn',status:'completed',started_at:1,finished_at:2}
+  const state=vue.reactive({messages:[{id:'reply',role:'assistant',datetime:'',avatar:'',content:'',isStreaming:false,
+    metadata:{thread_id:'lead',turn_id:'turn',status:'completed'},items:[
+      {...base,id:'before',sequence:1,type:'agentMessage',phase:'commentary',text:'先检查 {"type":"confirm"}。'},
+      {...base,id:'tool',sequence:2,type:'commandExecution',tool_name:'run_python',call_id:'c',label:'计算统计量'},
+      {...base,id:'child',thread_id:'child-thread',sequence:1,type:'agentMessage',text:'CHILD_ONLY'},
+      {...base,id:'plan',sequence:3,type:'plan',steps:[{step:'核对数据',status:'completed',note:''}]},
+      {...base,id:'answer',sequence:4,type:'agentMessage',phase:'final_answer',text:'最终结果 42。'},
+      {...base,id:'sources',sequence:5,type:'notice',name:'research_context',content:{files:['data/input.csv'],result_ids:['R1']}},
+      {...base,id:'confirm',sequence:6,type:'inputRequest',name:'paper_confirm',content:'请确认下一步。'},
+    ]}],workStatus:'waiting'})
+  const host=hostRenderer(),files=[],results=[];let confirmations=0
+  const app=host.renderer.createApp({render:()=>vue.h(component.default,{...state,onOpenFile:p=>files.push(p),onOpenResult:id=>results.push(id),onConfirmPlan:()=>confirmations++})})
+  app.mount(host.root);await flush()
+  const rendered=text(host.root)
+  assert.ok(rendered.indexOf('先检查')<rendered.indexOf('计算统计量'))
+  assert.ok(rendered.indexOf('计算统计量')<rendered.indexOf('最终结果'))
+  assert.doesNotMatch(rendered,/CHILD_ONLY/,'child items stay in their own thread')
+  assert.match(rendered,/更新研究计划/)
+  const answer=host.find(n=>n.props?.class==='markdown'&&text(n)==='最终结果 42。')
+  assert.ok(answer&&answer.parent.kind!=='details','final answer stays outside tool details')
+  const button=label=>host.find(n=>n.kind==='button'&&text(n).trim()===label)
+  button('input.csv').props.onClick();button('查看实测结果').props.onClick()
+  assert.deepEqual(files,['data/input.csv']);assert.deepEqual(results,['R1'])
+  button('继续研究').props.onClick();assert.equal(confirmations,1)
+  state.messages.push({id:'user',role:'user',content:'新要求',datetime:'',avatar:''});await flush()
+  assert.equal(button('继续研究'),undefined,'an earlier request cannot authorize a new turn')
+  assert.match(text(host.root),/新要求/)
   app.unmount()
-  console.log(
-    'PASS: typed event titles, accessible controls, severity actions and stream expansion state stay consistent',
-  )
-})().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+  console.log('PASS: typed messages, tools, plans, sources and scoped confirmation')
+})().catch(e=>{console.error(e);process.exitCode=1})

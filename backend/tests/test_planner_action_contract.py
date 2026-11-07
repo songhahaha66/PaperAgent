@@ -34,7 +34,7 @@ def test_local_execution_conflict_keeps_actionable_reason_without_http_secrets()
     from ai_system.research.review_cache import error_detail
     reason='上个沙箱尚未确认销毁，请等待其 TTL 到期后重试；不会重跑中断代码'
     conflict=HTTPException(409,reason)
-    snapshot={'activity':[],'experiments':{},'executions':{}}
+    snapshot={'items':[],'experiments':{},'executions':{}}
     assert error_detail(conflict)==reason
     assert reason in planning_failure_message(conflict,snapshot)
     assert 'private-upstream-body' not in error_detail(HTTPException(500,'private-upstream-body'))
@@ -60,7 +60,7 @@ def test_create_then_edit_and_correct_extra_fields_in_same_agent(tmp_path,extra)
     assert model.calls==4 and state['action']['capability']=='pause'
     assert len(state['questions'])==1 and not state['experiments'] and not state['executions']
     assert next(iter(state['questions'].values()))['question']=='Clarified goal'
-    errors=[a for a in state['activity'] if a['status']=='failed']
+    errors=[a for a in state['items'] if a['status']=='failed']
     assert len(errors)==1 and next(iter(extra)) in errors[0]['message']
     transcript=next((workspace_path(tmp_path, '.system/transcripts')).glob('*.json')).read_text()
     assert 'fixed' in transcript and 'bad' in transcript
@@ -85,7 +85,7 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
     before=ctx.research.snapshot()
     assert len(before['questions'])==1 and not before['experiments'] and not before['executions']
     assert runtime.status()['used']==3
-    assert any(a.get('inputs',{}).get('question_id')=='stale-id' and a['status']=='failed' for a in before['activity'])
+    assert any(a.get('question_id')=='stale-id' and a['status']=='failed' for a in before['items'])
     resume(ctx.research);corrected=True
     assert asyncio.run(prepare_action(ctx))
     after=ctx.research.snapshot()

@@ -47,7 +47,7 @@ def test_single_visible_operation_reports_actual_failure(tmp_path,code,status):
             assert result['execution_status']==('interrupted' if code=='disconnect' else 'failed')
             assert ctx.fs.get_run_info(result['run_id'])['status']=='error'
             state=ctx.research.snapshot()
-            rows=[a for a in state['activity'] if a['capability'] in {'research.run_python','run_python'}]
+            rows=[a for a in state['items'] if a.get('tool_name') in {'research.run_python','run_python'}]
             assert len(rows)==1
             assert rows[0]['status']==status and rows[0]['message']
             assert rows[0]['run_id']==result['run_id']
@@ -67,7 +67,7 @@ def test_later_code_publishes_and_indexes_original_pending_run(tmp_path):
             first=await compute(ctx)
             rid=first['run_id'];state=ctx.research.snapshot()
             assert first['execution_status']=='interrupted' and ctx.fs.get_run_info(rid)['delivery_error']
-            assert next(a for a in state['activity'] if a['capability']=='research.run_python')['status']=='interrupted'
+            assert next(a for a in state['items'] if a.get('tool_name')=='research.run_python')['status']=='interrupted'
             session.offline=False
             await compute(ctx,'print(2)')
             path=f'outputs/research/{rid}/outputs/table.csv'
@@ -124,7 +124,7 @@ def test_local_publication_failure_is_recovered_without_another_code_cell(tmp_pa
         try:
             result=await compute(ctx)
             state=ctx.research.snapshot();rid=result['run_id']
-            assert next(a for a in state['activity'] if a['capability']=='research.run_python')['status']=='interrupted'
+            assert next(a for a in state['items'] if a.get('tool_name')=='research.run_python')['status']=='interrupted'
             assert not ctx.fs.get_run_info(rid)['delivery_error'], 'Download itself succeeded'
             monkeypatch.setattr(artifacts,'capture_run_files',capture)
             await recover_outputs(ctx)

@@ -129,7 +129,7 @@ class ConnectionManager:
                         'started_at': getattr(task, 'started_at', None)}
             batch = [{'type': 'reconnect', **identity}]
             for output in task_manager.get_outputs_after(work_id, after_seq):
-                key = 'update' if output.type == 'reply_update' else 'content' if output.type == 'content' else 'block'
+                key = 'update' if output.type == 'agent_event' else 'content' if output.type == 'content' else 'block'
                 batch.append({'type': output.type, key: output.data, 'seq': output.seq, 'task_id': task.task_id})
             batch.append({'type': 'reconnect_complete', **identity})
             # Replay is one bounded queue entry referring to existing task output;

@@ -17,7 +17,8 @@ from ai_system.core_handlers.llm_providers import create_llm_from_model_config
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
 from services.chat_services.chat_history_manager import ChatHistoryManager
-from services.chat_services.conversation_timeline import ReplyWriter, TIMELINE
+from services.chat_services.conversation_timeline import TurnWriter
+from ai_system.agent.context import CURRENT_TURN
 from ai_system.research.runtime import ResearchRuntime
 from ai_system.research.views import completed_work_status
 
@@ -44,7 +45,7 @@ async def main(owner_work=None, resume_work=None):
     def publish(update):
         with events.open('a') as stream:
             stream.write(json.dumps({'elapsed': round(time.monotonic()-started,2), 'update': update}, ensure_ascii=False) + '\n')
-    writer = ReplyWriter(history, work_id, 'live-acceptance-'+work_id+('-resume' if resume_work else ''), root, publish)
+    writer = TurnWriter(history, work_id, 'live-acceptance-'+work_id+('-resume' if resume_work else ''), root, publish)
     if resume_work:
         writer.text('验收中已修正报告的排版、图引用和样本来源表述；现在从交付阶段恢复，保留原有计算与文件。\n')
     class Callback(SimpleStreamCallback):
@@ -57,7 +58,7 @@ async def main(owner_work=None, resume_work=None):
     stream = StreamOutputManager(Callback())
     agent = PaperGraphAgent(llms['brain'], stream, str(root), work_id,
         codeagent_llm=llms['code'], output_mode='latex')
-    token = TIMELINE.set(writer)
+    token = CURRENT_TURN.set(writer.turn)
     try:
         await agent.run(QUESTION, action='resume' if resume_work else 'run')
         status = completed_work_status(root)
@@ -69,7 +70,7 @@ async def main(owner_work=None, resume_work=None):
         with SessionLocal() as db: update_work_status(db, work_id, 'paused')
         raise
     finally:
-        TIMELINE.reset(token)
+        CURRENT_TURN.reset(token)
 
 if __name__ == '__main__':
     parser=argparse.ArgumentParser()
