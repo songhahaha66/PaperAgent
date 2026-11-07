@@ -6,7 +6,7 @@ import { workspaceAPI, type Work } from '@/api/workspace'
 import { chatAPI } from '@/api/chat'
 import type { ResearchAction, ResearchSnapshot } from '@/types/research'
 import { useStudioCopy } from '@/lang/studio'
-import { currentActivity } from '@/utils/researchProgress'
+import { currentExecution } from '@/utils/researchProgress'
 
 export function useWorkSession(workId: Ref<string>) {
   const authStore = useAuthStore()
@@ -51,7 +51,7 @@ export function useWorkSession(workId: Ref<string>) {
           }
           researchSnapshot.value = {
             ...previous,
-            runtime: { ...runtime, current: currentActivity(runtime) },
+            runtime: { ...runtime, current: currentExecution(runtime) },
           }
         }
         return
@@ -79,7 +79,7 @@ export function useWorkSession(workId: Ref<string>) {
     researchSnapshot.value = snapshot.runtime
       ? {
           ...snapshot,
-          runtime: { ...snapshot.runtime, current: currentActivity(snapshot.runtime) },
+          runtime: { ...snapshot.runtime, current: currentExecution(snapshot.runtime) },
         }
       : snapshot
     applyWorkStatus(snapshot.work_status)

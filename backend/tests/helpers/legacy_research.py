@@ -94,8 +94,8 @@ def prompt_context(ctx, branch, methods, stage):
         remember_design(ctx,branch,[])
     actual=conditions(ctx.workspace,branch['source']+' '+branch['subproblem']['question'])
     try:
-        from ai_system.modules.registry import invoke_sync
-        hits=invoke_sync(ctx,'experience.search',question=branch['subproblem']['question'],methods=methods,actual=actual)
+        from ai_system.modules.registry import execute_internal_sync
+        hits=execute_internal_sync(ctx,'experience.search',question=branch['subproblem']['question'],methods=methods,actual=actual)
     except Exception:
         return '# 历史经验暂不可用，本次按当前契约独立研究，不推断历史内容。'
     selected=[];budget=150  # Reserve the instruction envelope within ~800 tokens.

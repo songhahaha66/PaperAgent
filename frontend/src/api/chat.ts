@@ -1,4 +1,4 @@
-import type { ConversationSegment, ExecutionDetail } from '@/utils/conversationTimeline'
+import type { ConversationItem } from '@/utils/conversationTimeline'
 import { apiClient } from '@/utils/apiClient'
 import type { ResearchAction, ResearchSnapshot, ResearchRevisionCommand } from '@/types/research'
 import type { PaperContext } from '@/api/paper'
@@ -18,27 +18,27 @@ export interface ChatSessionResponse {
 
 // 聊天API
 export const chatAPI = {
-  async resolveExecutions(
+  async resolveItems(
     workId: string,
     replyId: string,
-    segmentIds: string[],
-  ): Promise<{ reply_id: string; executions: ExecutionDetail[] }> {
-    const batches = Array.from({ length: Math.ceil(segmentIds.length / 100) }, (_, i) =>
-      segmentIds.slice(i * 100, (i + 1) * 100),
+    itemIds: string[],
+  ): Promise<{ reply_id: string; items: ConversationItem[] }> {
+    const batches = Array.from({ length: Math.ceil(itemIds.length / 100) }, (_, i) =>
+      itemIds.slice(i * 100, (i + 1) * 100),
     )
     const results = await Promise.all(
       batches.map((ids) =>
-        apiClient.request<{ reply_id: string; executions: ExecutionDetail[] }>(
-          `/api/chat/work/${workId}/execution-references`,
+        apiClient.request<{ reply_id: string; items: ConversationItem[] }>(
+          `/api/chat/work/${workId}/items`,
           {
             method: 'POST',
-            body: JSON.stringify({ reply_id: replyId, segment_ids: ids }),
+            body: JSON.stringify({ reply_id: replyId, item_ids: ids }),
             headers: { 'Content-Type': 'application/json' },
           },
         ),
       ),
     )
-    return { reply_id: replyId, executions: results.flatMap((result) => result.executions) }
+    return { reply_id: replyId, items: results.flatMap((result) => result.items) }
   },
   // 获取工作的聊天历史（新API）
   async getWorkChatHistory(
@@ -80,9 +80,7 @@ export const chatAPI = {
   },
 
   // 获取AI任务状态（用于断线重连）
-  async getTaskStatus(
-    workId: string,
-  ): Promise<{
+  async getTaskStatus(workId: string): Promise<{
     has_task: boolean
     task_id?: string
     reply_id?: string
@@ -326,7 +324,15 @@ export interface ChatMessage {
   isStreaming?: boolean
   paper_execution?: { id: string; research_id: string; state: string }
   json_blocks?: any[]
-  message_type?: 'text' | 'json_card' | 'timeline'
-  segments?: ConversationSegment[]
-  metadata?: { reply_id?: string; chat_task_id?: string; revision?: number; status?: string; paper_context?: PaperContext }
+  message_type?: 'text' | 'json_card' | 'agent_turn'
+  items?: ConversationItem[]
+  metadata?: {
+    reply_id?: string
+    chat_task_id?: string
+    thread_id?: string
+    turn_id?: string
+    event_seq?: number
+    status?: string
+    paper_context?: PaperContext
+  }
 }

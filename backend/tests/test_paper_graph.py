@@ -63,7 +63,7 @@ def test_graph_end_to_end_offline(tmp_path):
     assert all(sum(r['question_id']==qid for r in manifest.values())==2 for qid in business['questions'])
     exported=(ws/'code/research_solution.py').read_text(encoding='utf-8')
     assert 'forecast = 1234.5678' in exported and 'plt.plot' in exported
-    assert not any(a['capability']=='experiments.execute' for a in business['activity'])
+    assert not any(a.get('tool_name')=='experiments.execute' for a in business['items'])
     registry=ResultRegistry.load(WorkspaceFS(str(ws)))
     assert registry.results=={} and registry.claims=={}
     for qid,q in business['questions'].items():

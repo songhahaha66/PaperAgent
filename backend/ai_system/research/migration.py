@@ -296,16 +296,6 @@ def migrate_workspace(store):
                 if new in names:
                     raise ValueError(f"发现两套 {old}/{new}，停止迁移以避免覆盖")
                 db.execute(f'ALTER TABLE "{old}" RENAME TO "{new}"')
-        db.execute("""CREATE TABLE IF NOT EXISTS research_activity (
-            research_id TEXT NOT NULL, id TEXT NOT NULL, started_at REAL NOT NULL,
-            updated_at REAL NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(research_id,id))""")
-        db.execute('CREATE INDEX IF NOT EXISTS research_activity_recent ON research_activity(research_id,started_at DESC,id DESC)')
-        for row in db.execute('SELECT id,payload FROM research').fetchall():
-            state = json.loads(row[1])
-            for item in state.pop('activity', []):
-                db.execute('INSERT OR IGNORE INTO research_activity VALUES (?,?,?,?,?)',
-                    (row[0], item['id'], item['started_at'], item.get('finished_at') or item['started_at'], json.dumps(item, ensure_ascii=False)))
-            db.execute('UPDATE research SET payload=? WHERE id=?', (json.dumps(state, ensure_ascii=False), row[0]))
         from services.chat_services.chat_history_manager import migrate_chat
         migrate_chat(db, store.root)
         migrate_runtime(db, store.root)

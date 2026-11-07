@@ -27,13 +27,12 @@ export interface EvidenceUse {
   task_ids: string[]
   quote: string
 }
-export interface ResearchActivity {
+export interface RuntimeStatus {
   id: string
   action_id?: string | null
   observation_id?: string | null
   question_id?: string | null
   experiment_id?: string | null
-  parent_call_id?: string | null
   subject?: string | null
   purpose?: string | null
   inputs?: Record<string, unknown>
@@ -45,7 +44,7 @@ export interface ResearchActivity {
   updated_at?: number
   task_id?: string | null
   label: string
-  capability?: string
+  tool_name?: string
   status: string
   started_at?: number | null
   finished_at?: number
@@ -56,7 +55,15 @@ export interface ResearchActivity {
   reasoning_tokens?: number | null
   generation_limit?: number | null
   finish_reason?: string | null
-  context_usage?: { messages_estimated_tokens: number; tools_estimated_tokens: number; total_estimated_tokens?: number; original_messages_estimated_tokens: number; summarized_messages: number; cache_phase?: string; reused_prefix_messages?: number } | null
+  context_usage?: {
+    messages_estimated_tokens: number
+    tools_estimated_tokens: number
+    total_estimated_tokens?: number
+    original_messages_estimated_tokens: number
+    summarized_messages: number
+    cache_phase?: string
+    reused_prefix_messages?: number
+  } | null
 }
 export interface ResearchHistory {
   id: string
@@ -91,7 +98,7 @@ export interface ReadableResult {
 export interface ResearchExperiment {
   interpretation_version?: string
   primary_result_refs?: string[]
-  current_actions?: ResearchActivity[]
+  current_actions?: RuntimeStatus[]
   record?: {
     summary?: string
     approach?: string
@@ -196,7 +203,7 @@ export interface ResearchSnapshot {
   questions?: ResearchQuestion[]
   evidence_uses?: EvidenceUse[]
   runtime?: {
-    current?: ResearchActivity | null
+    current?: RuntimeStatus | null
     updated_at?: number | null
     models_updated_at?: number
     history?: ResearchHistory[]
@@ -218,8 +225,8 @@ export interface ResearchSnapshot {
         request_seconds: number
       }[]
     } | null
-    actions: ResearchActivity[]
-    models?: ResearchActivity[]
+    actions: RuntimeStatus[]
+    models?: RuntimeStatus[]
     decisions: {
       id: string
       action: string

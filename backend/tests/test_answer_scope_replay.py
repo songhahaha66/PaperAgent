@@ -70,8 +70,9 @@ def test_distinct_scopes_are_retained_and_reused_with_sources_in_writing(tmp_pat
     prompt=json.dumps(execution_context(store,{first,second}),ensure_ascii=False)
     assert all(v['reference'] in prompt and v['meaning']['scope'] in prompt and v['content_hash'] in prompt for v in values.values())
     assert 'data/rows.csv' in prompt and store.snapshot()==before
-    store.record_activity({'id':'old','started_at':1,'capability':'run_python','status':'completed',
-        'experiment_id':second,'question_id':qid,'inputs':{'code':'PRIVATE_LONG_CODE'*2000},'output':{'report':'DUPLICATE_REPORT'*2000}})
+    from ai_system.agent.runtime import dispatch, ToolInvocation
+    asyncio.run(dispatch(ctx,ToolInvocation('example','private-call',{'code':'PRIVATE_LONG_CODE'*2000}),
+                         lambda:{'report':'DUPLICATE_REPORT'*2000}))
     _,context=decision_context(store,store.snapshot())
     assert 'artifacts' not in context and 'PRIVATE_LONG_CODE' not in json.dumps(context) and 'DUPLICATE_REPORT' not in json.dumps(context)
     assert {r['id'] for e in context['experiments'] for r in e['results']}=={r1,r2}

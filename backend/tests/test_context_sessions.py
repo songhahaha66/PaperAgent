@@ -38,18 +38,20 @@ def test_invalid_manuscript_target_does_not_close_the_computation_kernel(tmp_pat
 @pytest.mark.usefixtures('offline_kernel')
 def test_missing_response_reconciles_committed_code_instead_of_replaying(tmp_path):
     from ai_system.modules.registry import invoke
-    from ai_system.research.session import invoke_once
+    from ai_system.agent.runtime import invoke as invoke_tool
+    from ai_system.modules.registry import capabilities
+    from ai_system.agent.store import AgentStore
     from ai_system.research.runtime import execution_scope
     ctx=context(tmp_path)
     async def run():
         q=await invoke(ctx,'research.update_question',question='计算一次并保存')
         args={'question_id':q['question_id'],'code':"from pathlib import Path\np=Path('outputs/count.txt')\np.write_text(str(int(p.read_text())+1 if p.exists() else 1))\nprint(p.read_text())"}
         with execution_scope(action_id='stable-call'):
-            await invoke_once(ctx,'research.run_python',args,'stable-call')
-        with ctx.research._transaction() as db:
-            db.execute("DELETE FROM commands WHERE id='tool-response:stable-call'")
+            (await invoke_tool(ctx,capabilities(),'research.run_python',args,call_id='stable-call')).value
+        with AgentStore(tmp_path).transaction() as db:
+            db.execute("DELETE FROM tool_receipts WHERE call_id='stable-call'")
         with execution_scope(action_id='stable-call'):
-            value=await invoke_once(ctx,'research.run_python',args,'stable-call')
+            value=(await invoke_tool(ctx,capabilities(),'research.run_python',args,call_id='stable-call')).value
         assert value['recovered'] and len(ctx.fs._manifest['runs'])==1 and not ctx.research.snapshot()['experiments']
         assert (tmp_path/'outputs/count.txt').read_text()=='1'
         await ctx.kernels.close()
@@ -81,12 +83,16 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
         result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt'])
         assert result['status']=='completed' and len(result['run_ids'])==1
         assert result['answer']==answer
-        activities=ctx.research.snapshot()['activity']
-        parent=next(row for row in activities if row['capability']=='research.delegate')
-        assert parent['output']['answer']==answer
-        child=[row for row in activities if row['capability']=='run_python']
+        items=ctx.research.snapshot()['items']
+        parent=next(row for row in items if row.get('tool_name')=='research.delegate')
+        assert 'answer' not in parent, 'model ToolResult is not a UI Item'
+        child=[row for row in items if row.get('tool_name')=='run_python']
         assert len(child)==1 and child[0]['id']!=parent['id']
-        assert child[0]['parent_call_id']==parent['id'], 'independent execution keeps its own record'
+        assert child[0]['thread_id']==parent['child_thread_id'] and child[0]['thread_id']!=parent['thread_id']
+        from ai_system.agent.store import AgentStore
+        with AgentStore(tmp_path).connect() as db:
+            thread=json.loads(db.execute('SELECT payload FROM threads WHERE id=?',(child[0]['thread_id'],)).fetchone()[0])
+        assert thread['parent_item_id']==parent['id']
         assert bool(any('parent-context-marker' in str(m.content) for m in seen[0]))==(mode=='fork')
         actual=[p for p in result['files'] if p.endswith('/outputs/result.txt')]
         assert len(actual)==1 and ctx.fs.canonical_artifact(actual[0]).read_text()=='12'

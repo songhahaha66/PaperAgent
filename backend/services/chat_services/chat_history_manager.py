@@ -128,6 +128,7 @@ class ChatHistoryManager:
             self._write_message(db, reply)
 
     def interrupt_reply(self, work_id, reply_id, expected_revision):
+        from ai_system.agent.store import AgentStore
         with self._database(work_id, write=True) as db:
             row = db.execute('SELECT payload FROM chat_messages WHERE id=?', (str(reply_id),)).fetchone()
             if row is None: return None
@@ -136,8 +137,6 @@ class ChatHistoryManager:
             if metadata.get('status') != 'running' or metadata.get('revision') != expected_revision:
                 return None
             metadata.update(status='interrupted', revision=expected_revision + 1)
-            for segment in reply.get('segments', []):
-                item = segment.get('execution')
-                if item and not item.get('finished_at'): item['status'] = 'interrupted'
             self._write_message(db, reply)
-            return reply
+        AgentStore(safe_join(self.workspace_base, work_id)).interrupt(root_turn_id=reply_id)
+        return reply

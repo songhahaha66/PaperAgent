@@ -287,7 +287,7 @@ def test_provider_sustain_renews_a_live_call_and_rejects_an_oversize_grant(tmp_p
 def test_sandbox_errors_reach_the_user_instead_of_a_generic_controller_message():
     from ai_system.research.planner import planning_failure_message
     from ai_system.research.review_cache import error_detail
-    snapshot = {'activity': [], 'experiments': {}, 'executions': {}}
+    snapshot = {'items': [], 'experiments': {}, 'executions': {}}
     lost = SandboxApiException()
     message = planning_failure_message(lost, snapshot)
     assert '研究控制器未完成下一行动' not in message
@@ -299,7 +299,7 @@ def test_sandbox_errors_reach_the_user_instead_of_a_generic_controller_message()
     assert error_detail(failed) == '重建失败：镜像拉取失败'
 
 
-def test_research_tool_shows_the_retry_note_to_the_model_and_the_activity(tmp_path):
+def test_research_tool_shows_the_retry_note_to_the_model_and_the_item(tmp_path):
     from ai_system.graph.context import GraphContext
     from ai_system.modules.registry import invoke
     from ai_system.research.store import ResearchStore
@@ -320,7 +320,7 @@ def test_research_tool_shows_the_retry_note_to_the_model_and_the_activity(tmp_pa
             result = await invoke(ctx, 'research.run_python', question_id=qid, code='compute-year', title='跑全年模型')
             assert result['execution_status'] == 'succeeded'
             assert RETRIED_NOTE in result['observation']
-            row = next(a for a in ctx.research.snapshot()['activity'] if a['capability'] == 'research.run_python')
+            row = next(a for a in ctx.research.snapshot()['items'] if a.get('tool_name') == 'research.run_python')
             assert row['status'] == 'completed'
             assert row['message'] == RETRIED_NOTE
             assert session.calls == ['compute-year', 'compute-year']

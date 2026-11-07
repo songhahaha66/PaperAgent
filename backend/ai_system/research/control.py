@@ -34,8 +34,8 @@ async def observe(state, runtime):
         await ctx.kernels.disconnect()
     if ctx.experience_scope is not None:
         try:
-            from ai_system.modules.registry import invoke
-            await invoke(ctx, 'experience.candidates')
+            from ai_system.modules.registry import execute_internal_sync
+            execute_internal_sync(ctx, 'experience.candidates')
         except Exception:
             await ctx.events.stage('经验索引暂不可用，研究继续；可在经验面板补建')
     ctx.skill_policy = store.skill_preferences()['policy']

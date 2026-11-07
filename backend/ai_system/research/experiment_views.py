@@ -107,8 +107,8 @@ def experiments_view(business, safe_file, current_files=None):
             'interpretation_version':interpretation_version(business,task),
             'primary_result_refs':[item['id'] for item in items if item['id'] in cited and item.get('meaning')],
             'record':report,
-            'current_actions':[{**a,'label':LABELS.get(a['capability'],'研究行动')}
-                               for a in business.get('activity',[]) if a.get('experiment_id')==key][-40:],
+            'current_actions':[a
+                               for a in business.get('items',[]) if a.get('experiment_id')==key][-40:],
             'interpretation_history':[{'report_ref':ref,'report':a['report'],'status':'superseded'}
                  for ref,a in business['artifacts'].items() if a['type']=='report' and a['experiment_id']==key and ref!=task['report_ref']],
             'historical_claims':[{**claim_view(c['payload'],[a['payload'] for a in business['artifacts'].values()]),

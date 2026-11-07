@@ -60,9 +60,9 @@ async def prepare_action(ctx):
     key,context=decision_context(store,snapshot)
     observation_id='observation:'+uuid4().hex
     try:
-        from .views import activity
+        from .runtime import execution_scope
         from ai_system.graph.tracing import labelled
-        with activity(ctx,'research.observe',observation_id=observation_id,action_id=key), labelled('observe'):
+        with execution_scope(observation_id=observation_id,action_id=key), labelled('observe'):
             result=await Planner(ctx.planner_llm).run(ctx,context,observation_id)
         turn=context.get('user_message')
         if turn:
@@ -87,7 +87,7 @@ async def prepare_action(ctx):
         if (current.get('action') or {}).get('capability')=='reply':return False
         if (current.get('action') or {}).get('status')!='planned':
             raise NoResearchProgress('本次未获得新信息或安排下一行动，记录已保存，请继续处理或补充必要信息。')
-        await ctx.events.emit('research_activity',{'observation_id':observation_id})
+        await ctx.events.emit('execution_changed',{'observation_id':observation_id})
         action=store.snapshot().get('action') or {}
         if action.get('reason'):await ctx.events.stage(action['reason'])
         return action.get('capability')=='pause' and action.get('status')=='planned'
@@ -128,14 +128,14 @@ async def act(request, runtime):
     ctx=runtime.context
     action=ctx.research.snapshot()['action']
     if _observed_action(action) or action['id']!=request['action_id']:return {}
-    with execution_scope(action_id=action['id'],observation_id=action.get('observation_id'),
+    with execution_scope(action_id=action['id'],tool_call_id='scheduled:'+action['id'],observation_id=action.get('observation_id'),
                          experiment_id=action.get('experiment_id') or action.get('target'),
                          question_id=action.get('question_id'),events=ctx.events,
                          research_id=ctx.research.research_id,purpose=action.get('reason')):
         try:
             await _act(request,runtime)
             return {}
-        finally:await ctx.events.emit('research_activity',{'action_id':action['id']})
+        finally:await ctx.events.emit('execution_changed',{'action_id':action['id']})
 
 
 async def _act(request, runtime):

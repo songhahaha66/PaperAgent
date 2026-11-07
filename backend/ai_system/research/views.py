@@ -148,18 +148,14 @@ def evidence_uses(snapshot, source_root=None):
 
 
 def execution(snapshot, work_status=None, source_root=None):
-    from services.chat_services.conversation_timeline import execution_projection
-    from services.file_services.workspace_fs import WorkspaceFS
-    fs=WorkspaceFS(source_root) if source_root is not None else None
+    from ai_system.agent.protocol import TOOL_TYPES
     active=work_status in {'in_progress','running','processing'} or (work_status is None and snapshot['outcome']=='running')
-    actions=[]
-    for item in snapshot.get('activity',[])[-120:]:
-        row=execution_projection(source_root,snapshot['research_id'],item,fs=fs)
+    actions=[dict(item) for item in snapshot.get('items', []) if item['type'] in TOOL_TYPES][-120:]
+    for row in actions:
         if row['status']=='running' and not active:row['status']='interrupted'
-        actions.append(row)
     current=next((row for row in reversed(actions) if row['status']=='running'),None)
     return {'actions':actions,'decisions':snapshot.get('decision_history',[])[-40:],
-            'current':current, 'updated_at':max(snapshot.get('updated_at', 0), snapshot.get('activity_updated_at', 0))}
+            'current':current, 'updated_at':max(snapshot.get('updated_at', 0), snapshot.get('items_updated_at', 0))}
 
 
 def research_history(store, snapshot):
@@ -170,22 +166,15 @@ def research_history(store, snapshot):
             'inputs_changed':'输入已改变','research_revised':'研究要求已修改',
             'recovery_requested':'恢复研究','action_failed':'操作失败',
             'clarification_requested':'等待补充信息','action_interrupted':'研究已暂停',
-            'action_prepared':'暂停研究','activity_finished':'研究已暂停'}
+            'action_prepared':'暂停研究'}
     with store._connect() as db:
         rows=db.execute('SELECT seq,kind,payload FROM journal WHERE research_id=? AND kind IN ('+
-                        ','.join('?' for _ in labels)+") AND (kind!='activity_finished' OR json_extract(payload,'$.status')='interrupted') AND (kind!='action_prepared' OR json_extract(payload,'$.capability')='pause') ORDER BY seq DESC LIMIT 100",
+                        ','.join('?' for _ in labels)+") AND (kind!='action_prepared' OR json_extract(payload,'$.capability')='pause') ORDER BY seq DESC LIMIT 100",
                         (store.research_id,*labels)).fetchall()
-    known = {json.loads(row['payload']).get('id') for row in rows if row['kind'] == 'activity_finished'}
-    with store._connect() as db:
-        rows = list(rows) + [{'seq': 'activity:' + row['id'], 'kind': 'activity_finished',
-                             'payload': row['payload']} for row in db.execute(
-            "SELECT id,payload FROM research_activity WHERE research_id=? AND json_extract(payload,'$.status')='interrupted' ORDER BY updated_at DESC LIMIT 100",
-            (store.research_id,)) if row['id'] not in known]
     result=[]
     for row in rows:
         data=json.loads(row['payload']);kind=row['kind']
         if kind=='action_prepared' and data.get('capability')!='pause':continue
-        if kind=='activity_finished' and data.get('status')!='interrupted':continue
         eid=data.get('experiment_id') or data.get('task_id')
         if not eid and data.get('attempt_id'):
             eid=(snapshot['executions'].get(data['attempt_id']) or {}).get('task_id')
@@ -265,96 +254,6 @@ def model_activity(store, work_status):
             'reasoning_tokens':item.get('reasoning_tokens'),'generation_limit':item.get('generation_limit'),
             'finish_reason':(item.get('diagnostic') or {}).get('finish_reason')})
     return result
-
-
-from contextlib import contextmanager
-from contextvars import ContextVar
-
-_ACTIVITY_OWNER = ContextVar('paperagent_activity_owner', default=None)
-
-
-def _activity_error(item, exc):
-    from .review_cache import error_detail
-    item.update(status='interrupted' if type(exc).__name__=='CancelledError' else 'failed',
-                error_type=type(exc).__name__, message=error_detail(exc))
-
-def activity_progress(ctx, item):
-    """Persist a bounded execution preview; full logs stay in run files."""
-    from .runtime import notify_runtime
-    store = getattr(ctx, 'research', None)
-    if store is None:
-        return
-    store.record_activity(item)
-    from services.chat_services.conversation_timeline import execution_boundary
-    execution_boundary(store.root, store.research_id, 'activity', item)
-    notify_runtime()
-
-
-def activity_metadata(ctx, capability, **output):
-    """Enrich the existing tool row; direct helper calls create no extra activity."""
-    owner = _ACTIVITY_OWNER.get()
-    if owner and owner[0] is ctx and owner[1]['capability'] == capability:
-        item = owner[1]
-        item['output'] = {**item.get('output', {}), **output}
-        activity_progress(ctx, item)
-
-@contextmanager
-def activity(ctx, capability, task_id=None, *, reuse_parent=None, **links):
-    """One visible owner per operation; reuse is explicit and context-local.
-
-    A Python executor can enrich its registry call, while independent branches
-    and standalone executors retain their own records. Only the owner finishes.
-    """
-    import time
-    from uuid import uuid4
-    from .runtime import execution_scope,execution_links,notify_runtime
-    owner = _ACTIVITY_OWNER.get()
-    if (reuse_parent and owner and owner[0] is ctx and owner[1]['capability']==reuse_parent
-            and owner[1]['id']==execution_links().get('parent_call_id')
-            and owner[1]['status']=='running' and not owner[1].get('finished_at')):
-        item=owner[1]
-        item.update({key:value for key,value in links.items() if key!='inputs' and value is not None})
-        try:
-            activity_progress(ctx,item)
-            yield item
-        except BaseException as exc:
-            _activity_error(item,exc)
-            raise
-        return
-    store=getattr(ctx,'research',None)
-    snapshot=store.snapshot() if store is not None else None
-    if snapshot is None:store=None
-    if task_id is not None:
-        experiment=(snapshot or {}).get('experiments',{}).get(task_id) or {}
-        links.update(experiment_id=task_id,question_id=experiment.get('question_id'))
-    question=((snapshot or {}).get('questions',{}).get(links.get('question_id')) or {})
-    experiment=((snapshot or {}).get('experiments',{}).get(links.get('experiment_id')) or {})
-    subject=(experiment.get('subproblem') or {}).get('title') or question.get('title') or ''
-    item={'id':uuid4().hex,'capability':capability,'task_id':task_id,
-          'parent_call_id':execution_links().get('parent_call_id'),
-          **execution_links(),'subject':subject,**links,'started_at':time.time(),'status':'running'}
-    with execution_scope(**{**links,'step':LABELS.get(capability,links.get('step')),'subject':subject},events=getattr(ctx,'events',None),
-                         research_id=store.research_id if store else None,parent_call_id=item['id']):
-        if store:
-            store.record_activity(item)
-            from services.chat_services.conversation_timeline import execution_boundary
-            execution_boundary(store.root, store.research_id, 'activity', item)
-            notify_runtime()
-        token = _ACTIVITY_OWNER.set((ctx,item))
-        try:
-            yield item
-        except BaseException as exc:
-            _activity_error(item,exc)
-            raise
-        finally:
-            _ACTIVITY_OWNER.reset(token)
-            item['finished_at']=time.time()
-            if item['status']=='running':item['status']='completed'
-            if store:
-                store.record_activity(item)
-                from services.chat_services.conversation_timeline import execution_boundary
-                execution_boundary(store.root, store.research_id, 'activity', item)
-                notify_runtime()
 
 
 def delivery_summary(snapshot, stages=None):

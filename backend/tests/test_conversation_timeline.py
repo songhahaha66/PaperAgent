@@ -12,29 +12,30 @@ from pathlib import Path
 import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from services.chat_services.chat_history_manager import ChatHistoryManager
-from services.chat_services.conversation_timeline import ReplyWriter
-from helpers.conversation import writer, call
+from services.chat_services.conversation_timeline import TurnWriter
+from helpers.conversation import writer, call, record
 
 
 def test_interleaving_checkpoint_before_publish_and_same_row_update(tmp_path):
     manager, root, reply, updates = writer(tmp_path)
+    updates.clear()
     reply.publish = lambda update: updates.append((deepcopy(update), manager.get_messages('work')))
     prose = 'Before\n```json\n{"type":"confirm","content":"ordinary prose"}\n```'
     reply.text(prose)
     assert manager.get_messages('work')[0]['content'] == ''  # unpublished buffer
-    reply.execution(root, 'research-1', 'activity', call())
-    first_id = reply.reply['segments'][1]['id']
+    record(reply, call())
+    first_id = reply.reply['items'][1]['id']
     reply.text('After')
-    reply.execution(root, 'research-1', 'activity', call(status='completed', finished_at=3))
+    record(reply, call(status='completed', finished_at=3))
     reply.finish('completed')
     stored = manager.get_messages('work')
     assert len(stored) == 1 and stored[0]['id'] == reply.id
-    assert [r['type'] for r in stored[0]['segments']] == ['text', 'execution', 'text']
-    assert stored[0]['segments'][0]['text'] == prose
-    assert stored[0]['segments'][1]['id'] == first_id
-    assert stored[0]['segments'][1]['execution']['status'] == 'completed'
-    for update, snapshot in updates[1:]:
-        assert snapshot[0]['metadata']['revision'] == update['revision']
+    assert [r['type'] for r in stored[0]['items']] == ['agentMessage', 'toolCall', 'agentMessage']
+    assert stored[0]['items'][0]['text'] == prose
+    assert stored[0]['items'][1]['id'] == first_id
+    assert stored[0]['items'][1]['status'] == 'completed'
+    for update, snapshot in updates:
+        assert snapshot[0]['metadata']['event_seq'] == update['event']['seq']
         assert snapshot[0]['metadata']['reply_id'] == update['reply_id']
     assert stored[0]['metadata']['chat_task_id'] == 'chat-task'
 
@@ -42,15 +43,15 @@ def test_interleaving_checkpoint_before_publish_and_same_row_update(tmp_path):
 @pytest.mark.parametrize('terminal', ['completed', 'failed', 'cancelled', 'paused'])
 def test_terminal_paths_finalize_same_message_and_separate_successive_turns(tmp_path, terminal):
     manager, root, reply, _ = writer(tmp_path)
-    reply.execution(root, 'research-1', 'activity', call())
+    record(reply, call())
     reply.finish(terminal, 'visible terminal notice')
     reply.finish('failed', 'must not duplicate')
-    second = ReplyWriter(manager, 'work', 'chat-task-2', root, lambda _: None)
+    second = TurnWriter(manager, 'work', 'chat-task-2', root, lambda _: None)
     second.text('second answer'); second.finish('completed')
     messages = manager.get_messages('work')
     assert len(messages) == 2 and messages[0]['id'] != messages[1]['id']
-    assert messages[0]['metadata']['status'] == terminal
-    assert messages[0]['segments'][0]['execution']['status'] == 'interrupted'
+    assert messages[0]['metadata']['status'] == ('interrupted' if terminal in {'cancelled','paused'} else terminal)
+    assert messages[0]['items'][0]['status'] == 'interrupted'
     assert 'visible terminal notice' in messages[0]['content']
     assert 'must not duplicate' not in messages[0]['content']
 
@@ -99,6 +100,44 @@ def test_restart_reconciliation_does_not_rewrite_newer_reply(tmp_path):
     assert interrupted['content'] == 'durable'
 
 
+@pytest.mark.parametrize('complete', [False, True])
+def test_history_cursor_and_items_share_a_snapshot_during_live_updates(tmp_path, monkeypatch, complete):
+    from ai_system.agent.store import AgentStore
+    from services.chat_services.conversation_timeline import public_reply
+    _, root, reply, _ = writer(tmp_path)
+    reply.text('Before'); reply.flush()
+    cached = deepcopy(reply.reply)
+    before_seq = cached['metadata']['event_seq']
+    connect = AgentStore.connect
+    updated = False
+
+    def concurrent_update(sql):
+        nonlocal updated
+        # Commit through another connection after the history Item read, just
+        # before its cursor read. WAL permits this while a reader holds a snapshot.
+        if not updated and 'FROM events' in sql:
+            updated = True
+            reply.text(' plus live')
+            if complete: reply.finish('completed')
+            else: reply.flush()
+
+    def traced_connect(store):
+        db = connect(store)
+        if store.read_only: db.set_trace_callback(concurrent_update)
+        return db
+
+    monkeypatch.setattr(AgentStore, 'connect', traced_connect)
+    history = public_reply(cached, root=root)
+    assert updated and reply.reply['content'] == 'Before plus live'
+    assert history['content'] == 'Before'
+    assert history['metadata']['event_seq'] == before_seq
+    assert history['metadata']['status'] == 'running'
+    current = public_reply(cached, root=root)
+    assert current['content'] == 'Before plus live'
+    assert current['metadata']['event_seq'] == reply.reply['metadata']['event_seq']
+    assert current['metadata']['status'] == ('completed' if complete else 'running')
+
+
 def test_reference_resolver_uses_existing_work_authorization(monkeypatch, tmp_path):
     import asyncio
     from types import SimpleNamespace
@@ -115,13 +154,13 @@ def test_reference_resolver_uses_existing_work_authorization(monkeypatch, tmp_pa
     monkeypatch.setattr(chat, 'ChatService', Service)
     monkeypatch.setattr('services.data_services.crud.get_work', lambda *_: SimpleNamespace(created_by=7))
     monkeypatch.setattr(chat, 'get_workspace_path', lambda _: root)
-    request = chat.ExecutionReferences(reply_id=reply.id, segment_ids=[])
+    request = chat.ItemReferences(reply_id=reply.id, item_ids=[])
     closed = []
     db = SimpleNamespace(close=lambda: closed.append(True))
     with pytest.raises(HTTPException) as denied:
-        asyncio.run(chat.get_execution_references('work', request, 8, db))
+        asyncio.run(chat.get_items('work', request, 8, db))
     assert denied.value.status_code == 403 and not reads
-    assert asyncio.run(chat.get_execution_references('work', request, 7, db)) == {'reply_id': reply.id, 'executions': []}
+    assert asyncio.run(chat.get_items('work', request, 7, db)) == {'reply_id': reply.id, 'items': []}
     assert closed == [True]
 
 
@@ -131,7 +170,7 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
     from routers.chat_routes import chat
     async def scenario():
         task = SimpleNamespace(task_id='chat-task', reply_id='reply', action='ask')
-        updates = [SimpleNamespace(type='reply_update', seq=i, data={'reply_id':'reply','revision':i,'segments':[]}) for i in range(1, 4)]
+        updates = [SimpleNamespace(type='agent_event', seq=i, data={'reply_id':'reply','revision':i,'segments':[]}) for i in range(1, 4)]
         monkeypatch.setattr(chat.task_manager, 'get_outputs_after', lambda _, seq: [u for u in updates if u.seq > seq])
         delivered = []
         class Socket:
@@ -145,7 +184,7 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
         assert [p['seq'] for p in delivered if 'seq' in p] == [2, 3]
         assert all(p.get('reply_id') == 'reply' for p in [delivered[0], delivered[-1]])
         assert delivered[1]['update']['revision'] == 2
-        await manager.send('work', {'type':'reply_update','update':updates[-1].data}, 3)
+        await manager.send('work', {'type':'agent_event','update':updates[-1].data}, 3)
         await subscription.queue.join()
         assert len(delivered) == 4, 'already-replayed output is not sent again'
         manager.disconnect('work', socket)
@@ -153,7 +192,7 @@ def test_live_replay_keeps_task_sequence_and_stable_reply(monkeypatch):
 
 
 def test_failure_detail_redacts_credentials_provider_urls_and_external_paths(tmp_path):
-    from services.chat_services.conversation_timeline import safe_diagnostic
+    from ai_system.agent.projection import safe_diagnostic
     diagnostic = safe_diagnostic(tmp_path,
         'ValueError: shape mismatch; api_key="owner-secret"; Authorization: Bearer bearer-secret; '
         'https://owner:secret@example.test/request?key=private; /home/owner/private/config.json')

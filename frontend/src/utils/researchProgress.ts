@@ -1,10 +1,10 @@
-import type { ResearchSnapshot, ResearchActivity, ResearchQuestion } from '@/types/research'
+import type { ResearchSnapshot, RuntimeStatus, ResearchQuestion } from '@/types/research'
 
 export const researchRunning = (status?: string) =>
   ['in_progress', 'running', 'processing'].includes(status || '')
-export const callRunning = (row: ResearchActivity) =>
+export const callRunning = (row: RuntimeStatus) =>
   !row.finished_at && ['running', 'sent', 'http_response'].includes(row.status)
-export const currentActivity = (runtime: NonNullable<ResearchSnapshot['runtime']>) => {
+export const currentExecution = (runtime: NonNullable<ResearchSnapshot['runtime']>) => {
   const rows = [...(runtime.actions || []), ...(runtime.models || [])]
   const current =
     rows.filter(callRunning).sort((a, b) => (b.started_at || 0) - (a.started_at || 0))[0] || null
@@ -28,7 +28,7 @@ export function researchExecution(snapshot: ResearchSnapshot | null, workStatus?
     running,
     interrupted: ['paused', 'failed', 'cancelled'].includes(status),
     waiting: status === 'waiting',
-    current: running && snapshot?.runtime ? currentActivity(snapshot.runtime) : null,
+    current: running && snapshot?.runtime ? currentExecution(snapshot.runtime) : null,
   }
 }
 
@@ -58,7 +58,7 @@ export function orderedQuestions(questions: ResearchQuestion[]) {
     .sort((a, b) => (a.order ?? Infinity) - (b.order ?? Infinity) || a.index - b.index)
     .map(({ question }) => question)
 }
-export function activityHeadline(row: ResearchActivity, zh = true) {
+export function runtimeHeadline(row: RuntimeStatus, zh = true) {
   if (row.kind === 'model')
     return row.status === 'http_response'
       ? zh
@@ -67,7 +67,7 @@ export function activityHeadline(row: ResearchActivity, zh = true) {
       : zh
         ? '等待模型响应'
         : 'Waiting for model response'
-  if (row.capability === 'experiments.execute') return zh ? '正在处理实验' : 'Working on experiment'
+  if (row.tool_name === 'experiments.execute') return zh ? '正在处理实验' : 'Working on experiment'
   return row.label
 }
 export const executionLabel = (status: string) =>
@@ -88,12 +88,12 @@ export const executionLabel = (status: string) =>
     waiting: '等待补充信息',
     recorded: '记录已保存',
   })[status] || '状态未记录'
-export function activityStatus(row: ResearchActivity) {
+export function runtimeStatus(row: RuntimeStatus) {
   if (callRunning(row) && row.kind !== 'model')
     return row.phase === 'delivery' ? '同步文件' : row.phase === 'preparing' ? '准备中' : '进行中'
   return executionLabel(row.status)
 }
-export function executionDuration(row: ResearchActivity, now: number, running: boolean) {
+export function executionDuration(row: RuntimeStatus, now: number, running: boolean) {
   if (!row.started_at) return '时间未记录'
   const end = row.finished_at || (running && callRunning(row) ? now : null)
   if (end == null) return '结束时间未记录'
@@ -159,7 +159,7 @@ export function researchHeadline(
 ) {
   const execution = researchExecution(snapshot, workStatus)
   if (execution.waiting) return zh ? '等待补充研究信息' : 'Waiting for research input'
-  if (execution.current) return activityHeadline(execution.current, zh)
+  if (execution.current) return runtimeHeadline(execution.current, zh)
   if (execution.running) return zh ? '研究执行中' : 'Research in progress'
   if (zh && snapshot?.delivery_summary?.state === 'incomplete')
     return snapshot.delivery_summary.label
@@ -196,7 +196,9 @@ export function researchHeadline(
   if (snapshot.artifacts.length)
     return zh ? '论文产物已保存，可查看' : 'Paper artifacts saved and available'
   if (snapshot.runs?.length || snapshot.results.length)
-    return zh ? '已有运行记录与输出，论文产物尚不可用' : 'Runs and outputs saved; paper artifacts unavailable'
+    return zh
+      ? '已有运行记录与输出，论文产物尚不可用'
+      : 'Runs and outputs saved; paper artifacts unavailable'
   return zh ? '等待研究执行与产出' : 'Awaiting research activity and outputs'
 }
 

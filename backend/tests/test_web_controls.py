@@ -79,7 +79,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
     class Agent:
         def __init__(self,llm,stream,*args,**kwargs):self.stream=stream
         async def run(self,problem,**kwargs):
-            await self.stream.send_json_block('paper_stage','Q4：求解中')
+            await self.stream.send_json_block('research_commentary',{'id':'a'*64,'text':'Q4：求解中'})
             await asyncio.Event().wait()
     monkeypatch.setattr(chat,'verify_token',lambda token:7)
     monkeypatch.setattr(chat,'is_active_user',lambda db,user_id:True)
@@ -109,8 +109,8 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
                 if event['type'] == 'message_routed':
                     assert event['action']=='run'
                     continue
-                assert event['type'] == 'reply_update'
-                if any(s.get('block', {}).get('type') == 'paper_stage' for s in event['update']['segments']): break
+                assert event['type'] == 'agent_event'
+                if event['update']['event'].get('item',{}).get('text')=='Q4：求解中': break
             else: pytest.fail('paper_stage checkpoint missing')
             running = ChatHistoryManager(str(root.parent)).get_messages(root.name)[-1]
             assert running['id'] == start['reply_id'] and running['metadata']['status'] == 'running'
@@ -119,15 +119,15 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
             for _ in range(10):
                 event = ws.receive_json()
                 if event['type'] == 'complete': break
-                assert event['type'] == 'reply_update'
+                assert event['type'] == 'agent_event'
             else: pytest.fail('terminal pause receipt missing')
             assert event['work_status']=='paused' and event['reload_history']
             assert work.status=='paused'
             messages = ChatHistoryManager(str(root.parent)).get_messages(root.name)
             replies = [message for message in messages if message['role'] == 'assistant']
             assert len(replies) == 1 and replies[0]['id'] == start['reply_id']
-            assert replies[0]['metadata']['status'] == 'paused'
-            assert '任务已暂停' in replies[0]['content'] and 'paper_stage' in str(replies[0]['segments'])
+            assert replies[0]['metadata']['status'] == 'interrupted'
+            assert '任务已暂停' in replies[0]['content'] and 'Q4：求解中' in str(replies[0]['items'])
             assert any(message['role'] == 'user' and message['content'] == 'test' for message in messages)
         work.created_by=9
         assert client.post('/api/chat/work/pause-test/pause').status_code==403

@@ -59,7 +59,7 @@ def decision_context(store, snapshot):
         'user_message':snapshot.get('conversation_input'),
         'skill_policy':store.skill_preferences()['policy']}
     context['available_method_keys'] = sorted(allowed_method_keys(context['skill_policy']))
-    context['recent_operations']=[{k:a.get(k) for k in ('capability','question_id','experiment_id','status','message','error_type')} for a in snapshot.get('activity',[]) if a.get('capability')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
+    context['recent_operations']=[{k:a.get(k) for k in ('tool_name','question_id','experiment_id','status','message','error_type')} for a in snapshot.get('items',[]) if a.get('tool_name')!='research.observe' and (a.get('question_id') in {None,selected['id'] if selected else None} or a.get('experiment_id') in scope)][-12:]
     if last.get('capability','').startswith('writing.'):
         context['document_diagnostics']=(last.get('result') or {}).get('issues',[])
     from .runs import run_context
@@ -72,7 +72,7 @@ def decision_context(store, snapshot):
     return 'action:' + digest(context), context
 
 def preserved_progress(snapshot):
-    runs={a['run_id'] for a in snapshot.get('activity', []) if a.get('run_id')}
+    runs={a['run_id'] for a in snapshot.get('items', []) if a.get('run_id')}
     if runs:return f'已保留 {len(runs)} 次计算的代码、日志和实际结果文件。'
     count=sum(e['execution_status']=='succeeded' and e['validity']=='current' for e in snapshot['experiments'].values())
     return f'已保留 {count} 项实验成果和全部执行记录。' if snapshot['executions'] else '原题和当前研究记录已保存，尚未开始实验。'
@@ -89,8 +89,8 @@ def planning_failure_message(error, snapshot):
         detail=sandbox_text
     elif isinstance(error,GraphRecursionError):
         detail='研究工具循环达到图步骤上限，尚未完成下一行动；这不是费用额度耗尽。'
-        last=next((a.get('message') for a in reversed(snapshot.get('activity',[]))
-                   if a.get('status')=='failed' and a.get('capability')!='research.observe' and a.get('message')),None)
+        last=next((a.get('message') for a in reversed(snapshot.get('items',[]))
+                   if a.get('status')=='failed' and a.get('tool_name')!='research.observe' and a.get('message')),None)
         if last:detail+=' 最近具体反馈：'+last
     elif isinstance(error,HTTPException) and 400<=error.status_code<500:
         from .review_cache import error_detail
@@ -145,16 +145,12 @@ class Planner:
         from ai_system.config.generation import request_model
         from ai_system.modules.registry import capabilities,invoke
         from .runtime import execution_scope
-        from .views import activity
         from .review_cache import error_detail
-        registry=capabilities();tools=[];mapping={};read_tools=set()
+        registry=capabilities();tools=[];mapping={}
         for capability in sorted(registry.model_capabilities(),key=lambda c:c.name):
             name=capability.name.replace('.','_');mapping[name]=capability.name
-            if capability.access=='read':read_tools.add(name)
             async def call(_name=capability.name,**kwargs):return await invoke(ctx,_name,**kwargs)
             tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,coroutine=call))
-        lock=asyncio.Lock()
-        read_slots=asyncio.Semaphore(4)
         known_revision=ctx.research.snapshot()["revision"]
         def input_version():
             main=ctx.workspace/('paper.tex' if ctx.output_mode=='latex' else 'paper.md')
@@ -184,53 +180,42 @@ class Planner:
         async def feedback(request,handler):
             nonlocal known_revision,known_inputs,last_tool_feedback,manuscript_edited
             call=request.tool_call;name=call['name'];key='research-tool:'+ctx.research.research_id+':'+call['id']
-            async with (ctx.delegation_slots if name=='research_delegate' else read_slots if name in read_tools else lock):
-                from .runtime import ResearchRuntime
-                meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
-                snapshot=ctx.research.snapshot()
-                args=call['args']
-                if name=='writing_edit':
-                    from ai_system.modules.writing.draft import observed_version
-                    args={**args,'expected_version':observed_version(ctx.agent_messages,args.get('path','paper.md'))}
-                operation='tool:'+digest([name,args,ctx.research.file_inputs(),snapshot['spec'],snapshot.get('document')])
-                meter.check_guard(operation)
-                with execution_scope(action_id=key,observation_id=observation_id,tool_call_id=key,expected_revision=known_revision):
-                    try:
-                        if name not in mapping:raise ValueError('未知工具 '+name+'；请使用已提供的工具名称')
-                        # ModuleRegistry validates raw args inside its durable activity
-                        # boundary, including extra fields and failed references.
-                        from .session import invoke_once
-                        result=await invoke_once(ctx,mapping[name],args,key)
-                        if name=='writing_edit':manuscript_edited=True
-                        if isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}:
-                            meter.failed(operation,digest(result.get('observation','')),'execution','本次代码执行未完成；已有日志保留，请修改实现后继续。')
-                        else:meter.succeeded(operation)
-                        if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
-                        if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
-                            known_inputs={**known_inputs,'document':result['version']}
-                        last_tool_feedback=''
-                        from ai_system.modules.writing.document import tool_content
-                        failed=isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}
-                        return ToolMessage(content=tool_content(ctx,result,ctx.coder_llm),tool_call_id=call['id'],name=name,status='error' if failed else 'success')
-                    except (ValueError,KeyError,FileNotFoundError) as exc:
-                        detail=error_detail(exc);last_tool_feedback=detail
-                        meter.failed(operation,digest(detail),'tool_input',detail)
-                        # Registered calls already have a failed activity. Unknown
-                        # tools have no registry boundary, so retain that call here.
-                        if name not in mapping:
-                            try:
-                                with activity(ctx,'research.tool_error',action_id=key,observation_id=observation_id) as item:
-                                    item['inputs']=call
-                                    raise ValueError(detail)
-                            except ValueError:pass
-                        return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
-                    except Exception as exc:
-                        from ai_system.sandbox.lifetime import readable_sandbox_error
-                        detail=readable_sandbox_error(exc)
-                        if detail is None:
-                            raise
-                        last_tool_feedback=detail
-                        return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
+            from .runtime import ResearchRuntime
+            meter=ResearchRuntime(ctx.research.root,ctx.research.research_id)
+            snapshot=ctx.research.snapshot()
+            args=call['args']
+            if name=='writing_edit':
+                from ai_system.modules.writing.draft import observed_version
+                args={**args,'expected_version':observed_version(ctx.agent_messages,args.get('path','paper.md'))}
+            operation='tool:'+digest([name,args,ctx.research.file_inputs(),snapshot['spec'],snapshot.get('document')])
+            meter.check_guard(operation)
+            with execution_scope(action_id=key,observation_id=observation_id,tool_call_id=key,expected_revision=known_revision):
+                try:
+                    from ai_system.agent.runtime import invoke as invoke_tool
+                    outcome=await invoke_tool(ctx,registry,mapping.get(name,name),args,call_id=key)
+                    result=outcome.value
+                    if name=='writing_edit':manuscript_edited=True
+                    if isinstance(result,dict) and result.get('execution_status') in {'failed','cancelled','interrupted'}:
+                        meter.failed(operation,digest(result.get('observation','')),'execution','本次代码执行未完成；已有日志保留，请修改实现后继续。')
+                    else:meter.succeeded(operation)
+                    if isinstance(result,dict) and 'revision' in result:known_revision=result['revision']
+                    if name=='writing_edit' and result.get('path')==('paper.tex' if ctx.output_mode=='latex' else 'paper.md'):
+                        known_inputs={**known_inputs,'document':result['version']}
+                    last_tool_feedback=''
+                    from ai_system.modules.writing.document import tool_content
+                    failed=outcome.status!='completed'
+                    return ToolMessage(content=tool_content(ctx,result,ctx.coder_llm),tool_call_id=call['id'],name=name,status='error' if failed else 'success')
+                except (ValueError,KeyError,FileNotFoundError) as exc:
+                    detail=error_detail(exc);last_tool_feedback=detail
+                    meter.failed(operation,digest(detail),'tool_input',detail)
+                    return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
+                except Exception as exc:
+                    from ai_system.sandbox.lifetime import readable_sandbox_error
+                    detail=readable_sandbox_error(exc)
+                    if detail is None:
+                        raise
+                    last_tool_feedback=detail
+                    return ToolMessage(content=detail,tool_call_id=call['id'],name=name,status='error')
         pending_diagnostic=''
         resume_note=False
         initial_snapshot=True
@@ -264,10 +249,12 @@ class Planner:
             reply=state['messages'][-1]
             invalid=getattr(reply,'invalid_tool_calls',[])
             if invalid:
-                with activity(ctx,'research.tool_error',observation_id=observation_id) as item:
-                    item.update(status='failed',inputs={'calls':invalid},message='工具参数不是有效JSON，请按工具schema纠正')
+                from ai_system.agent.runtime import reject_call
+                for index, call in enumerate(invalid):
+                    await reject_call(ctx, call.get('id') or f'{observation_id}:invalid:{index}',
+                                      call.get('name') or 'unknown', '工具参数不是有效JSON，请按工具schema纠正')
                 pending_diagnostic='工具参数解析失败：'+json.dumps(invalid,ensure_ascii=False)+'。请纠正本次调用，不要重做已有计算。'
-                # Preserve raw failures in activity, but send only valid calls
+                # Record malformed calls as failed Items, but send only valid calls
                 # on the wire. Their observations must precede the next model
                 # request; jumping now would leave those calls unanswered.
                 clean=reply.model_copy(update={'invalid_tool_calls':[],
@@ -305,7 +292,7 @@ class Planner:
             async with session_saver(ctx) as saver:
                 agent=create_agent(model=request_model(self.llm),tools=tools,system_prompt=PROMPT + PROGRESS_PROMPT,
                     checkpointer=saver,middleware=[recorder,ProgressMiddleware(ctx.events,scope=observation_id),feedback,dispatched,malformed])
-                result=await run_session(agent,ctx.research.research_id+'-lead',messages,on_resume=resumed,
+                result=await run_session(agent,ctx.research.research_id+'-lead',messages,ctx=ctx,on_resume=resumed,
                                          new_user_turn_id=user_turn['id'] if user_turn else None)
             return result
         finally:

@@ -52,7 +52,7 @@ def test_materials_and_six_python_steps_stay_in_one_live_agent(tmp_path):
     assert (tmp_path/'outputs/intermediate/value.txt').read_text()=='6'
     assert state['publication']['stage']=='export' and not ctx.kernels._kernels
     assert not {'judgment','coverage','stop_reason'} & state['questions'][qid].keys()
-    assert not any(a['capability']=='experiments.execute' for a in state['activity'])
+    assert not any(a.get('tool_name')=='experiments.execute' for a in state['items'])
     assert not state['artifacts']
     assert all(ctx.fs.exists(r['stdout']) for r in ctx.fs._manifest['runs'].values())
     assert (tmp_path/'code/research_solution.py').is_file()

@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 from ai_system.research.store import ResearchStore
-from ai_system.research.views import activity, activity_progress
+from ai_system.agent.context import new_turn
+from ai_system.agent.protocol import ToolItem
 from ai_system.graph.agent import PaperGraphAgent
 from ai_system.graph.context import GraphContext
 from helpers.legacy_research import worker_context
@@ -17,7 +18,7 @@ from services.chat_services.chat_history_manager import ChatHistoryManager
 from helpers.contracts import store_for, submit
 
 
-def test_activity_progress_changes_only_its_row_and_recovers(tmp_path):
+def test_item_progress_is_independent_of_research_state_and_recovers(tmp_path):
     store = ResearchStore(tmp_path, 'research')
     store.initialize('Keep the business document stable during progress')
     def durable_business():
@@ -25,44 +26,51 @@ def test_activity_progress_changes_only_its_row_and_recovers(tmp_path):
             return (db.execute('SELECT payload FROM research').fetchall()[0][0],
                     [tuple(r) for r in db.execute('SELECT * FROM journal')])
     before = durable_business()
-    with activity(SimpleNamespace(research=store), 'run_python') as item:
-        item['preview'] = 'one'
-        activity_progress(SimpleNamespace(research=store), item)
-        assert store.snapshot()['activity'][0]['preview'] == 'one'
-        assert durable_business() == before
+    turn = new_turn(tmp_path,'lead',research_id='research')
+    item = ToolItem(id='unfinished',thread_id='lead',turn_id=turn.turn_id,type='commandExecution',
+                    tool_name='run_python',call_id='call',label='计算',started_at=2)
+    turn.put(item.model_dump(),'item/started')
+    item.output_tail='one'
+    turn.put(item.model_dump(),'item/updated')
+    assert store.snapshot()['items'][0]['output_tail']=='one'
     assert durable_business() == before
-    assert store.snapshot()['activity'][0]['status'] == 'completed'
-    store.record_activity({'id':'unfinished', 'started_at':2, 'status':'running'})
     store.recover()
-    assert next(a for a in store.snapshot()['activity'] if a['id']=='unfinished')['status']=='interrupted'
+    assert store.snapshot()['items'][0]['status']=='interrupted'
     with store._connect() as db:
-        assert 'activity' not in json.loads(db.execute('SELECT payload FROM research').fetchone()[0])
+        assert 'items' not in json.loads(db.execute('SELECT payload FROM research').fetchone()[0])
+        assert not db.execute("SELECT 1 FROM sqlite_master WHERE name='research_activity'").fetchone()
 
 
-def test_cutover_imports_legacy_activity_and_chat_once(tmp_path):
-    root = tmp_path / 'work'; root.mkdir()
-    store = ResearchStore(root, 'old'); store.initialize('Existing study')
-    item = {'id':'operation', 'started_at':12, 'status':'completed'}
-    legacy = {'messages':[{'id':7, 'role':'user', 'content':'original'}], 'context':{'topic':'study'}}
-    raw = json.dumps(legacy)
-    (workspace_path(root, 'chat_history.json')).write_text(raw)
+def test_agent_store_does_not_read_old_activity_or_message_segments(tmp_path):
+    from ai_system.agent.store import AgentStore
+    from services.chat_services.conversation_timeline import public_reply
+    store=ResearchStore(tmp_path,'study');store.initialize('Existing study')
     with store._transaction() as db:
-        state = json.loads(db.execute('SELECT payload FROM research WHERE id=?', ('old',)).fetchone()[0])
-        state['activity'] = [item]
-        db.execute('UPDATE research SET payload=? WHERE id=?', (json.dumps(state), 'old'))
-        from ai_system.research.migration import MIGRATION_VERSION
-        db.execute('DELETE FROM domain_migrations WHERE version=?',(MIGRATION_VERSION,))
-        db.execute('DROP TABLE chat_messages'); db.execute('DROP TABLE chat_metadata')
-    migrated = ResearchStore(root, 'old')
-    assert migrated.snapshot()['activity'] == [item]
-    manager = ChatHistoryManager(tmp_path)
-    manager.save_message('work', 'user', 'new')
-    assert [m['content'] for m in manager.get_messages('work')] == ['original', 'new']
-    assert (workspace_path(root, 'chat_history.json')).read_text() == raw
-    # Reopening never imports the old JSON again or replaces newer messages.
-    assert len(ChatHistoryManager(tmp_path).get_messages('work')) == 2
-    with migrated._connect() as db:
-        assert bytes(db.execute("SELECT raw FROM legacy_records WHERE source='chat_history.json'").fetchone()[0]).decode() == raw
+        db.execute('CREATE TABLE research_activity(payload TEXT)')
+        db.execute('INSERT INTO research_activity VALUES (?)',(json.dumps({'id':'old','status':'completed'}),))
+    assert AgentStore(tmp_path,read_only=True).items()==[]
+    assert 'segments' not in public_reply({'id':'old','segments':[{'type':'execution'}]})
+
+
+def test_research_recovery_closes_unfinished_chat_text_in_its_turn(tmp_path):
+    from ai_system.agent.protocol import MessageItem
+    store = ResearchStore(tmp_path, 'research'); store.initialize('Resume after a crash')
+    # Browser Threads are workspace-scoped; only their tool Items carry research_id.
+    old = new_turn(tmp_path, 'work')
+    old.put(MessageItem(id='text', thread_id='work', turn_id=old.turn_id,
+                        type='agentMessage', text='Partial answer', started_at=1).model_dump(), 'item/started')
+    old.put(ToolItem(id='tool', thread_id='work', turn_id=old.turn_id, research_id='research',
+                     type='toolCall', tool_name='read_file', call_id='read', label='Read',
+                     started_at=2).model_dump(), 'item/started')
+    current = new_turn(tmp_path, 'work')
+    current.put(MessageItem(id='new-text', thread_id='work', turn_id=current.turn_id,
+                            type='agentMessage', text='New request', started_at=3).model_dump(), 'item/started')
+    store.recover()
+    recovered = old.store.turn_snapshot(old.turn_id)
+    assert recovered['turn']['status'] == 'interrupted'
+    assert all(item['status'] == 'interrupted' for item in recovered['items'])
+    assert current.store.turn_snapshot(current.turn_id)['turn']['status'] == 'running'
+    assert current.store.get_item('new-text')['status'] == 'running'
 
 
 def test_resume_never_rebuilds_business_from_checkpoint(tmp_path):

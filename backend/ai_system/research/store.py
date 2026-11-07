@@ -101,25 +101,10 @@ class ResearchStore:
         if state and state.get("schema_version") != SCHEMA_VERSION:
             raise ValueError("研究数据尚未迁移，请先运行 python -m services.migrate_data")
         if state:
-            rows = db.execute('SELECT payload,updated_at FROM research_activity WHERE research_id=? ORDER BY started_at DESC,id DESC LIMIT 240',
-                              (self.research_id,)).fetchall()
-            state['activity'] = [json.loads(row[0]) for row in reversed(rows)]
-            state['activity_updated_at'] = max((row[1] for row in rows), default=0)
+            from ai_system.agent.store import AgentStore
+            state['items'] = AgentStore(self.root, read_only=True).items(research_id=self.research_id)
+            state['items_updated_at'] = max((item.get('updated_at') or item.get('finished_at') or item['started_at'] for item in state['items']), default=0)
         return state
-
-    def record_activity(self, item):
-        """Progress updates touch one row, never the business document or journal."""
-        with self._transaction() as db:
-            self._write_activity(db, item)
-
-    def _write_activity(self, db, item):
-        if item.get('run_id') and isinstance(item.get('inputs'),dict) and 'code' in item['inputs']:
-            # The canonical code lives in this run's input.py. Progress rows retain
-            # its locator/hash, not another full copy of the program.
-            item={**item,'inputs':{k:v for k,v in item['inputs'].items() if k!='code'},
-                  'input_code_hash':digest(item['inputs']['code'])}
-        db.execute('INSERT INTO research_activity VALUES (?,?,?,?,?) ON CONFLICT(research_id,id) DO UPDATE SET updated_at=excluded.updated_at,payload=excluded.payload',
-                   (self.research_id, item['id'], item['started_at'], time.time(), json.dumps(item, ensure_ascii=False)))
 
     def snapshot(self):
         with closing(self._connect()) as db:
@@ -132,7 +117,7 @@ class ResearchStore:
         payload={**execution_links(),**payload,'recorded_at':state['updated_at']}
         state["commit_seq"] += 1
         db.execute("INSERT OR REPLACE INTO research VALUES (?, ?)",
-                   (self.research_id, json.dumps({k: v for k, v in state.items() if k not in {"activity", "activity_updated_at"}}, ensure_ascii=False)))
+                   (self.research_id, json.dumps({k: v for k, v in state.items() if k not in {"items", "items_updated_at"}}, ensure_ascii=False)))
         db.execute("INSERT INTO journal VALUES (?, ?, ?, ?)",
                    (self.research_id, state["commit_seq"], kind, json.dumps(payload, ensure_ascii=False)))
 
@@ -165,7 +150,7 @@ class ResearchStore:
                      "assumptions": {a.id: {**a.model_dump(), "revision": 1, "status": "active", "source": "analysis", "producer_attempt": None} for a in assumptions},
                      "assumption_history": [], "validations": [],
                      "questions": {}, "experiments": tasks, "executions": {}, "artifacts": {}, "claims": {},
-                     "action": None, "publication": None, "activity": [], "activity_updated_at": 0,
+                     "action": None, "publication": None, "items": [], "items_updated_at": 0,
                      "sections": {}, "feedback": [], "faults": [], "legacy_records": [], "delivery_stages": {}, "outcome": "running",
                      "materials": {"inputs": self.file_inputs(), "profile": ""}}
             for experiment in tasks.values():
@@ -305,8 +290,8 @@ class ResearchStore:
         if self.experience_scope is not None:
             try:
                 from types import SimpleNamespace
-                from ai_system.modules.registry import invoke_sync
-                invoke_sync(SimpleNamespace(experience_scope=self.experience_scope,research=self), 'experience.candidates')
+                from ai_system.modules.registry import execute_internal_sync
+                execute_internal_sync(SimpleNamespace(experience_scope=self.experience_scope,research=self), 'experience.candidates')
             except Exception:
                 import logging
                 logging.getLogger(__name__).warning('研究已提交；经验索引未完成，可从经验面板补建')
@@ -723,6 +708,8 @@ class ResearchStore:
         An interrupted kernel cannot be restored from a graph checkpoint. Failed
         attempts remain in history; retries acquire new leases and attempt IDs.
         """
+        from ai_system.agent.store import AgentStore
+        AgentStore(self.root).interrupt(research_id=self.research_id)
         with self._transaction() as db:
             state = self._read(db)
             if not state:
@@ -733,11 +720,6 @@ class ResearchStore:
                     if issue["status"] == "inconclusive":
                         task["retired"] = False
                         issue["status"] = "suspected"
-            for operation in state.get('activity',[]):
-                if operation['status']=='running':
-                    operation['status']='interrupted'
-                    operation['interruption_detected_at']=time.time()
-                    self._write_activity(db, operation)
             if db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():
                 for row in db.execute('SELECT research_id,sequence,payload FROM model_requests').fetchall():
                     request=json.loads(row['payload'])

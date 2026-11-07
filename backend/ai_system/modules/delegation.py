@@ -82,34 +82,17 @@ async def delegate(ctx, inputs):
     def remember_run(run_id):
         local.fs.get_run_info(run_id).update(research_id=store.research_id, scope='delegated', task_id=tid)
         local.fs._save_manifest()
-        action=execution_links().get('action_id')
-        if action:
-            with store._transaction() as db:
-                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
-                    (store.research_id,'task-run:'+action,action,json.dumps({'run_id':run_id})))
+        from ai_system.research.runtime import CURRENT_EXECUTION
+        local.fs.get_run_info(run_id)['tool_call_id']=CURRENT_EXECUTION.get().get('tool_call_id')
+        local.fs._save_manifest()
     tools=build_tools(local,'task-'+tid,runs,kernel_key='task-'+tid,on_run=remember_run)
-    tool_lock=asyncio.Lock()
     @wrap_tool_call
     async def receipts(request,handler):
-        call=request.tool_call;identity=tid+':'+call['id'];response_key='task-response:'+identity
-        async with tool_lock:
-            with store._connect() as db:
-                response=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,response_key)).fetchone()
-                submitted=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,'task-run:'+identity)).fetchone()
-            if response:return ToolMessage.model_validate(json.loads(response[0]))
-            if submitted:
-                run_id=json.loads(submitted[0])['run_id'];info=local.fs.get_run_info(run_id) or {}
-                output=local.fs.read_text(info['stdout']) if info.get('stdout') and local.fs.exists(info['stdout']) else ''
-                message=ToolMessage(content='复用已有运行'+run_id+'，未重放代码。状态：'+str(info.get('status','unknown'))+'\n'+output[-6000:],tool_call_id=call['id'],name=call['name'])
-            else:
-                try:
-                    with execution_scope(action_id=identity):message=await handler(request)
-                except (ValueError,KeyError,FileNotFoundError) as exc:
-                    message=ToolMessage(content=str(exc),tool_call_id=call['id'],name=call['name'],status='error')
-            with store._transaction() as db:
-                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
-                    (store.research_id,response_key,identity,json.dumps(message.model_dump(),ensure_ascii=False,default=str)))
-            return message
+        from ai_system.agent.runtime import call_tool
+        call={**request.tool_call,'id':tid+':'+request.tool_call['id']}
+        message=await call_tool(local,call,lambda:handler(request),
+                                access='read' if call['name'] in {'read_file','search_literature'} else 'write')
+        return message.model_copy(update={'tool_call_id':request.tool_call['id']})
     async def read(path:str,start:int=0,limit:int=12000):
         value=await read_artifact(local,{'path':path,'task_id':None,'start':start,'limit':min(max(limit,1),24000)})
         return value.value
@@ -127,7 +110,7 @@ async def delegate(ctx, inputs):
                     agent=create_agent(model=ctx.coder_llm,tools=tools,system_prompt=prompt,checkpointer=saver,
                                        middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-task-'+tid,
                                            pinned={'initial_task':record['initial_task'],'follow_up':inputs['task'],'files':sources}),receipts])
-                    result=await run_session(agent,store.research_id+'-task-'+tid,messages)
+                    result=await run_session(agent,store.research_id+'-task-'+tid,messages,ctx=local)
             record.update(answer='\n\n'.join(public_progress(result['messages'][-1].content)),model_task=inputs['task'],status='delivering')
             save()
         export_solution_code(local,'task',runs)
@@ -221,15 +204,14 @@ async def review_document(ctx, inputs):
            StructuredTool.from_function(coroutine=read,name='read_file',description='读取固定版本正文和分配材料，返回文本。')]
     @wrap_tool_call
     async def visual(request,handler):
-        # StructuredTool serializes dictionaries; images hydrate only for the model.
-        try:message=await handler(request)
-        except (ValueError,KeyError,FileNotFoundError) as exc:
-            return ToolMessage(content=str(exc),tool_call_id=request.tool_call['id'],name=request.tool_call['name'],status='error')
+        from ai_system.agent.runtime import call_tool
+        message=await call_tool(local,request.tool_call,lambda:handler(request),access='read')
+        if message.status=='error':return message
         if request.tool_call['name']=='view_pdf_pages':
             value=json.loads(message.content)
             return message.model_copy(update={'content':tool_content(ctx,value,ctx.coder_llm)})
         return message
-    local=copy.copy(ctx);local.agent_messages=[]
+    local=copy.copy(ctx);local.agent_messages=[];local.tool_gates=None
     prompt=('你是主研究Agent按需调用的只读论文复核者，复用同一总预算。只检查指定固定版本，不能编辑正文、运行计算或再委派。'
             '先查看实际PDF页，再按疑点读取源码和指定材料。区分排版、原要求缺项、数值与计算口径疑点；没有图像能力时明确仅做文本复核。'
             '返回具体问题：source_version、pdf_sha256、页码、严重程度、类别、观察到什么、支持材料、建议主Agent怎么核实；说明已看页码与未检查范围。'
@@ -241,7 +223,7 @@ async def review_document(ctx, inputs):
                 agent=create_agent(model=ctx.coder_llm,tools=tools,system_prompt=prompt,checkpointer=saver,
                     middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-review-'+tid,pinned={
                         'source_version':version,'pdf_sha256':pdf_hash,'files':list(manifest),'materials':sources}),visual])
-                result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])])
+                result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])],ctx=local)
         record.update(status='completed',answer='\n\n'.join(public_progress(result['messages'][-1].content)),reviewed_pages=sorted(seen))
     except BaseException:
         record['status']='interrupted';raise

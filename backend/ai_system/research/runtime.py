@@ -47,7 +47,7 @@ def notify_runtime():
     payload={'research_id':current.get('research_id'),'recorded_at':time.time()}
     def send():
         async def emit():
-            try:await events.emit('research_activity',payload)
+            try:await events.emit('execution_changed',payload)
             except Exception:logging.getLogger(__name__).warning('执行状态通知失败',exc_info=True)
         loop.create_task(emit())
     try:loop.call_soon_threadsafe(send)

@@ -17,7 +17,32 @@ async def session_saver(ctx):
         yield saver
 
 
-async def run_session(agent, session, messages, *, on_resume=None, new_user_turn_id=None):
+async def run_session(agent, session, messages, *, ctx=None, on_resume=None, new_user_turn_id=None):
+    if ctx is not None:
+        from ai_system.agent.context import CURRENT_TOOL, CURRENT_TURN, session_turn
+        from ai_system.agent.protocol import MessageItem
+        from uuid import uuid4
+        import time
+        parent = CURRENT_TURN.get()
+        if CURRENT_TOOL.get() is not None or parent is None:
+            child = parent is not None
+            with session_turn(ctx, session) as turn:
+                if child and messages:
+                    entry=MessageItem(id=uuid4().hex,thread_id=turn.thread_id,turn_id=turn.turn_id,
+                                      type='userMessage',text=str(messages[-1].content),started_at=time.time())
+                    turn.put(entry.model_dump(), 'item/started')
+                    entry.status='completed';entry.finished_at=time.time()
+                    turn.put(entry.model_dump(), 'item/completed')
+                result=await run_session(agent,session,messages,on_resume=on_resume,new_user_turn_id=new_user_turn_id)
+                if child:
+                    from ai_system.graph.commentary import public_progress
+                    text='\n\n'.join(public_progress(result['messages'][-1].content))
+                    entry=MessageItem(id=uuid4().hex,thread_id=turn.thread_id,turn_id=turn.turn_id,
+                                      type='agentMessage',phase='final_answer',text=text,started_at=time.time())
+                    turn.put(entry.model_dump(), 'item/started')
+                    entry.status='completed';entry.finished_at=time.time()
+                    turn.put(entry.model_dump(), 'item/completed')
+                return result
     # Do not inherit the outer node's invocation-scoped checkpoint namespace.
     parent=var_child_runnable_config.get() or {}
     token=var_child_runnable_config.set(None)
@@ -32,7 +57,7 @@ async def run_session(agent, session, messages, *, on_resume=None, new_user_turn
             if saved.next and incoming and new_user_turn_id and new_user_turn_id not in seen:
                 # A new request takes precedence over tools left scheduled by
                 # the previous turn. Pair old calls without replaying them;
-                # invoke_once still reconciles any already-submitted products.
+                # ToolRuntime still reconciles any already-submitted products.
                 from langchain_core.messages import ToolMessage
                 history=saved.values.get('messages',[])
                 answered={m.tool_call_id for m in history if isinstance(m,ToolMessage)}
@@ -49,37 +74,3 @@ async def run_session(agent, session, messages, *, on_resume=None, new_user_turn
         else:value={'messages':messages}
         return await agent.ainvoke(value,config=config,durability='sync')
     finally:var_child_runnable_config.reset(token)
-
-
-async def invoke_once(ctx, name, inputs, key):
-    """Reuse a completed tool response; reconcile submitted code before any replay."""
-    import json
-    from .store import digest
-    from ai_system.modules.registry import invoke
-    store=ctx.research;receipt='tool-response:'+key;signature=digest([name,inputs])
-    with store._connect() as db:
-        row=db.execute('SELECT digest,response FROM commands WHERE research_id=? AND id=?',(store.research_id,receipt)).fetchone()
-    if row:
-        if row[0]!=signature:raise ValueError('同一工具调用不能更改参数，请发起新调用')
-        return json.loads(row[1])
-    if name == 'research.run_python':
-        from .runs import direct_runs, run_result
-        submitted = next((rid for rid, info in direct_runs(store, ctx.fs).items() if info.get('tool_call_id') == key), None)
-        if submitted:
-            result = {**run_result(ctx, submitted), 'recovered': True,
-                      'note': '复用已有运行回执；未重放代码。执行未知时先核实日志。'}
-            with store._transaction() as db:
-                db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
-                           (store.research_id, receipt, signature, json.dumps(result, ensure_ascii=False)))
-            return result
-    attempt=next((a for a in store.snapshot()['executions'].values() if a.get('tool_call_id')==key),None) if name=='research.run_python' else None
-    if attempt:
-        runs=[ctx.fs.get_run_info(rid) or {} for rid in attempt.get('run_ids',[])]
-        text='\n'.join(ctx.fs.read_text(r['stdout']) for r in runs if r.get('stdout') and ctx.fs.exists(r['stdout']))
-        result={'experiment_id':attempt['task_id'],'execution_status':attempt['execution_status'],
-            'run_ids':attempt.get('run_ids',[]),'observation':text[-6000:],
-            'recovered':True,'note':'复用了已提交运行；未重放代码。执行未知时读取日志核实。'}
-    else:result=await invoke(ctx,name,**inputs)
-    with store._transaction() as db:
-        db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',(store.research_id,receipt,signature,json.dumps(result,ensure_ascii=False,default=str)))
-    return result

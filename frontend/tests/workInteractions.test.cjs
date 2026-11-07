@@ -1,5 +1,34 @@
 const assert = require('node:assert/strict')
 const { loadModule, vue, pinia, flush } = require('./moduleHarness.cjs')
+function agentMessage(text, replyId, taskId, threadId, seq = 1) {
+  return {
+    type: 'agent_event',
+    task_id: taskId,
+    update: {
+      reply_id: replyId,
+      chat_task_id: taskId,
+      thread_id: threadId,
+      turn_id: replyId,
+      event: {
+        seq,
+        method: 'item/agentMessage/delta',
+        thread_id: threadId,
+        turn_id: replyId,
+        item: {
+          id: `${replyId}-text`,
+          type: 'agentMessage',
+          thread_id: threadId,
+          turn_id: replyId,
+          sequence: 1,
+          status: 'running',
+          started_at: 1,
+          phase: 'final_answer',
+          text,
+        },
+      },
+    },
+  }
+}
 async function environment() {
   const width = vue.ref(1400),
     isMobile = vue.ref(false)
@@ -411,7 +440,7 @@ if (require.main === module) (async () => {
   assert.equal(restored.state.panelSession.value.activeId, 'chat')
   env.store.split('first', 'file:code/model.py', 'right')
   env.store.open('first', 'files', undefined, 'secondary')
-  restored.sockets[0].message({ type: 'content', content: 'Still streaming' })
+  restored.sockets[0].message(agentMessage('Still streaming', 'reply-1', 'task-1', 'first'))
   assert.equal(restored.state.chatMessages.value.at(-1).content, 'Still streaming')
   assert.equal(restored.sockets.length, 1, 'switching and splitting tabs keeps the same stream')
   assert.equal(restored.state.panelSession.value.secondaryActiveId, 'files')
@@ -619,7 +648,7 @@ if (require.main === module) (async () => {
   assert.equal(running.state.runningAction.value, 'ask')
   running.sockets[0].reconnect({ type: 'reconnect' })
   assert.equal(running.state.connectionState.value, 'reconnecting')
-  running.sockets[0].message({ type: 'content', content: 'Recovered output' })
+  running.sockets[0].message(agentMessage('Recovered output', 'running-reply', 'running-task', 'running'))
   assert.equal(running.state.chatMessages.value.at(-1).content, 'Recovered output')
   running.sockets[0].reconnect({ type: 'reconnect_complete' })
   assert.equal(running.state.connectionState.value, 'live')
@@ -628,7 +657,7 @@ if (require.main === module) (async () => {
   assert.equal(running.state.chatMessages.value[0].id, 'saved', 'pausing reloads saved history')
   const count = running.state.chatMessages.value.length
   running.stop()
-  running.sockets[0].message({ type: 'content', content: 'Late output' })
+  running.sockets[0].message(agentMessage('Late output', 'running-reply', 'running-task', 'running', 2))
   assert.equal(running.state.chatMessages.value.length, count)
   assert.equal(running.sockets[0].closed, true)
   console.log('PASS: task recovery, connection indicators and pause stay independent of pane state')

@@ -206,7 +206,7 @@ def research_files(root):
     files = {name: content for name, content in workspace_bytes(root).items()
              if name not in {'state/chat_history.json', 'state/chat_history.json.lock',
                              'state/coordinator.lock',  # Runtime exclusion is not research evidence.
-                             'state/.system/research.sqlite'}}
+                             'state/.system/research.sqlite','state/.system/agent.sqlite','state/.system/agent.sqlite-wal','state/.system/agent.sqlite-shm'}}
     with closing(sqlite3.connect(workspace_path(root, '.system/research.sqlite'))) as db:
         for (name,) in db.execute("SELECT name FROM sqlite_master WHERE type='table'"):
             if name.startswith('chat_') or name == 'sqlite_sequence': continue
@@ -221,7 +221,7 @@ def durable_reply(root, reply_id, status):
     reply = replies[0]
     assert reply['id'] == reply_id == reply['metadata']['reply_id']
     assert reply['metadata']['status'] == status
-    assert reply['message_type'] == 'timeline' and reply['metadata']['chat_task_id']
+    assert reply['message_type'] == 'agent_turn' and reply['metadata']['chat_task_id']
     assert messages[0]['content'] == '原问题', 'incremental updates preserve previous history'
     return reply
 
@@ -234,16 +234,15 @@ def test_websocket_followup_never_constructs_graph_or_changes_research_status(we
     assert events[-1]["work_status"] == "completed"
     assert [name for name, _ in calls] == ["ask"]
     assert statuses == [] and work.status == "completed"
-    context_update = next(e['update'] for e in events if e['type'] == 'reply_update' and
-                          any(segment.get('block', {}).get('type') == 'research_context' for segment in e['update']['segments']))
-    context = next(segment['block']['content'] for segment in context_update['segments']
-                   if segment.get('block', {}).get('type') == 'research_context')
+    context_update = next(e['update'] for e in events if e['type']=='agent_event' and
+                          e['update']['event'].get('item',{}).get('name')=='research_context')
+    context = context_update['event']['item']['content']
     assert context['work_id'] == 'work' and context['schema_version'] == 1
     assert context_update['chat_task_id'] == events[0]['task_id']
     reply = durable_reply(root, events[0]['reply_id'], 'completed')
     assert context_update['reply_id'] == reply['id']
     assert reply['content'] == '已有数值是 0.82 [R1]'
-    assert 'research_context' in str(saved[-1]['segments'])
+    assert 'research_context' in str(saved[-1]['items'])
     assert original == research_files(root), 'conversation checkpoints must not mutate research evidence'
 
 
@@ -255,6 +254,18 @@ def test_websocket_auto_classifies_before_readonly_answer(web,monkeypatch):
     assert [name for name,_ in calls]==['classify','ask']
     assert next(e for e in events if e['type']=='message_routed')['action']=='ask'
     assert statuses==[]
+
+
+def test_main_agent_error_notice_ends_the_turn_as_failed(web, monkeypatch):
+    client, work, calls, statuses, saved, root = web
+    async def fail(self, text, **kwargs):
+        await self.stream.send_json_block('main_agent_error', '模型执行失败，结果已保留')
+    monkeypatch.setattr(chat.PaperGraphAgent, 'run', fail)
+    events = exchange(client, {'problem':'执行新任务', 'action':'run'})
+    assert events[-1]['type']=='complete' and events[-1]['work_status']=='failed'
+    reply = durable_reply(root, events[0]['reply_id'], 'failed')
+    assert any(i['type']=='notice' and i['name']=='main_agent_error' for i in reply['items'])
+    assert work.status=='failed'
 
 
 def test_question_while_waiting_preserves_pending_clarification(web):
@@ -369,7 +380,7 @@ def test_explicit_research_actions_reach_the_right_graph_entry(web, action, expe
     assert statuses == ["in_progress", "completed"]
     reply = durable_reply(root, events[0]['reply_id'], 'completed')
     assert reply['metadata']['chat_task_id'] == events[0]['task_id']
-    assert any(segment.get('block', {}).get('type') == 'main_agent_complete' for segment in reply['segments'])
+    assert any(item['type']=='agentMessage' and item['phase']=='final_answer' for item in reply['items'])
     assert saved[0]['id'] == saved[-1]['id'] == reply['id']
 
 
@@ -407,7 +418,7 @@ def test_multiple_browsers_observe_turns_reconnect_and_continue_after_submitter_
     async def answer(model, stream, *args, **kwargs):
         gate = asyncio.Event()
         gates.append(gate)
-        await stream.send_json_block('paper_stage', 'live step')
+        await stream.send_json_block('research_commentary', {'id':'b'*64,'text':'live step'})
         await gate.wait()
         await stream._output('shared answer')
 
@@ -434,7 +445,7 @@ def test_multiple_browsers_observe_turns_reconnect_and_continue_after_submitter_
             assert a == b and a['request_id'] == 'one'
             for _ in range(10):
                 event = observer.receive_json()
-                if any(s.get('block', {}).get('type') == 'paper_stage' for s in event.get('update', {}).get('segments', [])):
+                if event.get('update',{}).get('event',{}).get('item',{}).get('text')=='live step' and event.get('update',{}).get('event',{}).get('method')=='item/completed':
                     break
             else: pytest.fail('live step missing')
             observer.send_json({'problem': 'competing ask', 'action': 'ask', 'request_id': 'two'})
@@ -462,7 +473,7 @@ def test_multiple_browsers_observe_turns_reconnect_and_continue_after_submitter_
             assert start['task_id'] != a['task_id'] and start['reply_id'] != a['reply_id']
             for _ in range(10):
                 update = later.receive_json()
-                if any(s.get('block', {}).get('type') == 'paper_stage' for s in update.get('update', {}).get('segments', [])):
+                if update.get('update',{}).get('event',{}).get('item',{}).get('text')=='live step' and update.get('update',{}).get('event',{}).get('method')=='item/completed':
                     break
             client.portal.call(gates[1].set)
             assert receive_until(later, 'complete')[-1] == receive_until(observer, 'complete')[-1]
