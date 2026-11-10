@@ -31,7 +31,7 @@
           <span class="rotating-text-wrapper">
             <Transition name="rotate" mode="out-in">
               <span :key="activeStep" class="rotating-text">{{
-                t('introduction.' + stepKeys[activeStep] + 'Action')
+                t('introduction.' + currentStep.key + 'Action')
               }}</span>
             </Transition>
           </span>
@@ -53,7 +53,8 @@
             <h2>{{ t('introduction.caseTitle') }}</h2>
           </div>
           <button
-            class="play-button"
+            type="button"
+            class="pa-icon-button"
             :aria-label="playing ? t('introduction.pause') : t('introduction.play')"
             @click="togglePlayback"
           >
@@ -63,13 +64,19 @@
 
         <div
           id="case-stage"
+          ref="demoStage"
           class="demo-stage"
           role="tabpanel"
           :aria-labelledby="'step-' + activeStep"
+          @focusin="playing = false"
         >
           <Transition name="scene" mode="out-in">
-            <div :key="activeStep" class="scene">
-              <template v-if="activeStep === 0">
+            <div
+              :key="activeStep"
+              class="scene"
+              :class="{ 'scene-read': currentStep.key === 'read' }"
+            >
+              <template v-if="currentStep.key === 'read'">
                 <div class="question-block">
                   <t-icon name="chat" />
                   <p>{{ t('introduction.question') }}</p>
@@ -91,7 +98,7 @@
                   </ul>
                 </div>
               </template>
-              <template v-else-if="activeStep === 1">
+              <template v-else-if="currentStep.key === 'model'">
                 <div class="code-heading">
                   <span><t-icon name="code" />drying_model.py</span>
                   <a :href="asset('code/drying_model.py')" download
@@ -104,26 +111,31 @@
                   <p>{{ t('introduction.method') }}</p>
                 </div>
               </template>
-              <template v-else-if="activeStep === 2">
+              <template v-else-if="currentStep.figure">
                 <figure>
-                  <img
-                    :src="asset('figures/fig3_q23_field.png')"
-                    :alt="t('introduction.solveCaption')"
-                    width="968"
-                    height="660"
-                  />
-                  <figcaption>{{ t('introduction.solveCaption') }}</figcaption>
+                  <a
+                    class="figure-preview"
+                    :href="asset(currentStep.figure.file)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    :aria-label="`${t('introduction.viewFigure')} · ${t(currentStep.figure.caption)}`"
+                    @click="playing = false"
+                  >
+                    <img
+                      :src="asset(currentStep.figure.file)"
+                      :alt="t(currentStep.figure.caption)"
+                      :width="currentStep.figure.width"
+                      :height="currentStep.figure.height"
+                    />
+                    <span class="figure-action">
+                      {{ t('introduction.viewFigure') }} <t-icon name="arrow-top-right" />
+                    </span>
+                  </a>
+                  <figcaption>{{ t(currentStep.figure.caption) }}</figcaption>
                 </figure>
-              </template>
-              <template v-else-if="activeStep === 3">
-                <figure>
-                  <img
-                    :src="asset('figures/fig6_validation.png')"
-                    :alt="t('introduction.verifyCaption')"
-                  />
-                  <figcaption>{{ t('introduction.verifyCaption') }}</figcaption>
-                </figure>
-                <div class="validation-note">{{ t('introduction.validation') }}</div>
+                <div v-if="currentStep.key === 'verify'" class="validation-note">
+                  {{ t('introduction.validation') }}
+                </div>
               </template>
               <template v-else>
                 <a
@@ -151,19 +163,19 @@
 
         <div class="demo-steps" role="tablist" :aria-label="t('introduction.steps')">
           <button
-            v-for="(step, index) in stepKeys"
+            v-for="({ key }, index) in steps"
             :id="'step-' + index"
-            :key="step"
+            :key="key"
             role="tab"
             :aria-selected="activeStep === index"
             aria-controls="case-stage"
             :tabindex="activeStep === index ? 0 : -1"
             :class="{ active: activeStep === index, passed: activeStep > index }"
             @click="selectStep(index)"
-            @keydown.right.prevent="focusStep((index + 1) % stepKeys.length)"
-            @keydown.left.prevent="focusStep((index + stepKeys.length - 1) % stepKeys.length)"
+            @keydown.right.prevent="focusStep((index + 1) % steps.length)"
+            @keydown.left.prevent="focusStep((index + steps.length - 1) % steps.length)"
             @keydown.home.prevent="focusStep(0)"
-            @keydown.end.prevent="focusStep(stepKeys.length - 1)"
+            @keydown.end.prevent="focusStep(steps.length - 1)"
           >
             <span class="step-track"
               ><span
@@ -171,7 +183,7 @@
                   width: activeStep > index ? '100%' : activeStep === index ? progress + '%' : '0%',
                 }"
             /></span>
-            {{ t('introduction.' + step + 'Label') }}
+            {{ t('introduction.' + key + 'Label') }}
           </button>
         </div>
       </section>
@@ -184,7 +196,7 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -193,8 +205,34 @@ const { t } = useI18n()
 const router = useRouter()
 const authStore = useAuthStore()
 const paperUrl = import.meta.env.BASE_URL + 'main.pdf'
-const stepKeys = ['read', 'model', 'solve', 'verify', 'write'] as const
+const steps = [
+  { key: 'read', durationMs: 6000, figure: null },
+  { key: 'model', durationMs: 10000, figure: null },
+  {
+    key: 'solve',
+    durationMs: 10000,
+    figure: {
+      file: 'figures/fig3_q23_field.png',
+      caption: 'introduction.solveCaption',
+      width: 968,
+      height: 660,
+    },
+  },
+  {
+    key: 'verify',
+    durationMs: 10000,
+    figure: {
+      file: 'figures/fig6_validation.png',
+      caption: 'introduction.verifyCaption',
+      width: 1584,
+      height: 616,
+    },
+  },
+  { key: 'write', durationMs: 6000, figure: null },
+] as const
 const activeStep = ref(0)
+const currentStep = computed(() => steps[activeStep.value])
+const demoStage = ref<HTMLElement | null>(null)
 const progress = ref(0)
 const playing = ref(false)
 const asset = (file: string) => `${import.meta.env.BASE_URL}examples/drying/${file}`
@@ -212,6 +250,12 @@ const codeExcerpt = `class PropsQ23:
 let timer: ReturnType<typeof setInterval> | undefined
 let lastTick = 0
 let motionPreference: MediaQueryList | undefined
+let stageObserver: IntersectionObserver | undefined
+let stageVisible = false
+
+function resetTick() {
+  lastTick = performance.now()
+}
 
 function selectStep(index: number) {
   activeStep.value = index
@@ -224,11 +268,11 @@ async function focusStep(index: number) {
   document.getElementById('step-' + index)?.focus()
 }
 function togglePlayback() {
-  if (!playing.value && activeStep.value === stepKeys.length - 1) {
+  if (!playing.value && activeStep.value === steps.length - 1) {
     activeStep.value = 0
     progress.value = 0
   }
-  lastTick = performance.now()
+  resetTick()
   playing.value = !playing.value
 }
 function respectMotionPreference() {
@@ -243,15 +287,29 @@ onMounted(() => {
   motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
   playing.value = !motionPreference.matches
   motionPreference.addEventListener('change', respectMotionPreference)
-  lastTick = performance.now()
+  if (demoStage.value && typeof IntersectionObserver !== 'undefined') {
+    const threshold = 0.5
+    stageObserver = new IntersectionObserver(
+      ([entry]) => {
+        stageVisible = entry.intersectionRatio >= threshold
+        resetTick()
+      },
+      { threshold },
+    )
+    stageObserver.observe(demoStage.value)
+  } else {
+    stageVisible = true
+  }
+  document.addEventListener('visibilitychange', resetTick)
+  resetTick()
   timer = setInterval(() => {
     const now = performance.now()
     const elapsed = now - lastTick
     lastTick = now
-    if (!playing.value || document.hidden) return
-    progress.value = Math.min(100, progress.value + elapsed / 40)
+    if (!playing.value || !stageVisible || document.hidden) return
+    progress.value = Math.min(100, progress.value + (elapsed / currentStep.value.durationMs) * 100)
     if (progress.value < 100) return
-    if (activeStep.value === stepKeys.length - 1) {
+    if (activeStep.value === steps.length - 1) {
       playing.value = false
       return
     }
@@ -261,6 +319,8 @@ onMounted(() => {
 })
 onUnmounted(() => {
   clearInterval(timer)
+  stageObserver?.disconnect()
+  document.removeEventListener('visibilitychange', resetTick)
   motionPreference?.removeEventListener('change', respectMotionPreference)
 })
 </script>
@@ -430,32 +490,21 @@ nav a:hover,
   font-size: 18px;
   font-weight: 600;
 }
-.play-button {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  flex-shrink: 0;
-  border: 1px solid var(--pa-line);
-  border-radius: 50%;
-  color: var(--pa-ink);
-  background: var(--pa-surface);
-  cursor: pointer;
-}
-.play-button:hover {
-  background: var(--pa-surface-hover);
-}
 .demo-stage {
-  height: 382px;
-  padding: 24px 26px;
+  --demo-stage-height: 382px;
+  --demo-stage-padding-y: 24px;
+  min-height: var(--demo-stage-height);
+  padding: var(--demo-stage-padding-y) 26px;
   overflow: hidden;
   background: var(--pa-surface-muted);
 }
 .scene {
-  height: 100%;
   display: flex;
   flex-direction: column;
   min-width: 0;
+}
+.scene:not(.scene-read) {
+  height: calc(var(--demo-stage-height) - 2 * var(--demo-stage-padding-y));
 }
 .scene-enter-active,
 .scene-leave-active {
@@ -574,7 +623,27 @@ figure {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+}
+.figure-preview {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  color: var(--pa-accent);
+  text-decoration: none;
+}
+.figure-preview:hover .figure-action {
+  text-decoration: underline;
+}
+.figure-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  justify-self: end;
+  font-size: 12px;
 }
 figure img {
   display: block;
@@ -677,7 +746,8 @@ figcaption {
     font-size: 38px;
   }
   .demo-stage {
-    padding: 20px;
+    --demo-stage-padding-y: 20px;
+    padding-inline: 20px;
   }
 }
 @media (max-width: 780px) {
@@ -723,7 +793,7 @@ figcaption {
     padding: 18px 20px;
   }
   .demo-stage {
-    height: 360px;
+    --demo-stage-height: 360px;
   }
   .intro-footer {
     flex-wrap: wrap;
@@ -739,8 +809,9 @@ figcaption {
     gap: 3px;
   }
   .demo-stage {
-    height: 400px;
-    padding: 18px 16px;
+    --demo-stage-height: 400px;
+    --demo-stage-padding-y: 18px;
+    padding-inline: 16px;
   }
   .question-block p {
     font-size: 14px;

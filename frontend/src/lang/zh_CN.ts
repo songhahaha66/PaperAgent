@@ -151,6 +151,7 @@ export default {
     shrinkage: '药材收缩对烘干过程的影响',
     viewCode: '下载代码',
     method: '耦合热量与水分传递，以有限体积法进行数值求解。',
+    viewFigure: '查看原图',
     solveCaption: '含水率随时间与径向位置的变化',
     verifyCaption: '将数值解与解析解进行对比',
     validation: '检验数值精度，并分析参数变化对烘干时间的影响。',
