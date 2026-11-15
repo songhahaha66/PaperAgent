@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class SandboxSettings:
     provider: str = "opensandbox"
+    application: str = "paperagent"
     endpoint: str = "http://127.0.0.1:18080"
     api_key: str = field(default="", repr=False)
     image: str = "paperagent-research:workspace-v2"

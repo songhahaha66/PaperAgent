@@ -109,6 +109,8 @@ class GraphContext:
     output_mode: str = "markdown"  # latex 原生写 .tex 并编译 PDF；word 从 Markdown 导出 .docx
     template_requirements: str = ""  # 用户模板的结构与格式要求，写作时遵守
     agent_messages: list = field(default_factory=list)
+    agent_model: Any = None
+    allowed_capabilities: frozenset[str] | None = None
     tool_gates: Any = None
     stage_status: Dict[str, str] = field(default_factory=dict)
     stage_notes: Dict[str, str] = field(default_factory=dict)

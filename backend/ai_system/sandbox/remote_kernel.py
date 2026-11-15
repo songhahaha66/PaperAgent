@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import json
+import time
 from pathlib import Path
 
 from services.file_services.workspace_fs import WorkspaceFS
@@ -174,7 +175,10 @@ class RemoteKernel:
     async def execute(self, code, *, on_event=None):
         from .lifetime import RETRIED_NOTE, RETRY_FAILED_PREFIX
         from .reclaim import runtime_hold
+        waiting=time.monotonic();waiting_at=time.time()
         async with self._lock, self.execution_scope.operation(self, self.timeout), runtime_hold(self):
+            lock_wait={'phase':'lock_wait','started_at':waiting_at,'finished_at':time.time(),
+                       'seconds':round(time.monotonic()-waiting,4)}
             self._refresh_pending()
             if self.pending_run:
                 return CellResult(ok=False, stdout='', error='上次计算的文件尚未取回，请先调用 retry_outputs，不要重算。',
@@ -187,7 +191,7 @@ class RemoteKernel:
             for attempt in range(2):
                 if note:
                     self._lifetime_note = note
-                result = await self._execute_attempt(code, on_event=on_event)
+                result = await self._execute_attempt(code, on_event=on_event,lock_wait=lock_wait if attempt==0 else None)
                 if result.failure_kind != 'sandbox_lost' or attempt:
                     break
                 try:
@@ -207,12 +211,14 @@ class RemoteKernel:
             self._lifetime_note = None
             return result
 
-    async def _execute_attempt(self, code, *, on_event=None):
+    async def _execute_attempt(self, code, *, on_event=None,lock_wait=None):
             run_id = self.fs.create_run()
             self.fs.save_run_input(run_id, code)
             self.fs.save_run_stdout(run_id, "")
             self.fs.save_run_stderr(run_id, "")
             info = self.fs._manifest["runs"][run_id]
+            self.transfer.reset_metrics()
+            info['phase_timings']=[lock_wait] if lock_wait else []
             process_job = getattr(self.session, 'execution_mode', None) == 'process'
             info.update(status="starting", provider=self.settings.provider, runtime_image=self.settings.image,runtime_owner=self.owner,
                         execution_mode='process' if process_job else 'legacy')
@@ -248,11 +254,17 @@ class RemoteKernel:
             submitted = False
             noted = False
             phase = 'snapshot_inputs'
+            phase_started=time.monotonic()
+            phase_wall=time.time()
+            def finish_stage():
+                info['phase_timings'].append({'phase':phase,'started_at':phase_wall,
+                    'finished_at':time.time(),'seconds':round(time.monotonic()-phase_started,4)})
             def stage(name):
-                nonlocal phase
-                import time
+                nonlocal phase,phase_started,phase_wall
+                finish_stage()
                 phase=name
-                info.update(phase=name,phase_started_at=time.time())
+                phase_started=time.monotonic();phase_wall=time.time()
+                info.update(phase=name,phase_started_at=phase_wall)
                 self.fs._save_manifest()
             await event("starting")
             try:
@@ -270,8 +282,7 @@ class RemoteKernel:
                 stage('sync_inputs')
                 await asyncio.wait_for(self.transfer.sync_inputs(run_id), self.settings.startup_timeout)
                 stage('snapshot_remote_inputs')
-                await asyncio.wait_for(self.transfer.freeze_actual_inputs(run_id), self.settings.startup_timeout)
-                inventory=await self.session.inventory(kind='runtime')
+                inventory=await asyncio.wait_for(self.transfer.freeze_actual_inputs(run_id), self.settings.startup_timeout)
                 info['output_baseline']={row['path']:row['sha256'] for row in inventory}
                 info['cache_key']=self.session.cache_key
                 info.update(status="running", sandbox_id=self.session.id,
@@ -416,6 +427,7 @@ class RemoteKernel:
                           "cancelled" if cancelled else "timeout" if result.timed_out else "success" if result.ok else "error")
                 info.update(error=result.error, files=result.files, delivery_error=result.delivery_error,
                             failure_kind=result.failure_kind, context_restored=getattr(self.session, 'context_restored', False))
+                stage('archive_outputs')
                 self.fs.finish_run(run_id, status)
                 if execution_finished and not result.delivery_error and status in {'success', 'error'}:
                     try:
@@ -427,6 +439,9 @@ class RemoteKernel:
                         info['delivery_state'] = 'pending'
                         self.fs._save_manifest()
                         self.pending_run = run_id
+                finish_stage()
+                info['transfer']=self.transfer.metrics
+                self.fs._save_manifest()
                 await event("finished", status=status, error=result.error, files=result.files,
                             delivery_error=result.delivery_error)
                 # This client is no longer following the job. Durable pending
@@ -485,8 +500,8 @@ class RemoteKernel:
                         raise ValueError('恢复日志超过限额，原本地日志保留')
                     with (recovered_logs / (channel + '.log')).open('ab') as stream:
                         stream.write(raw)
-                recovery = (self.session.recover(run_id, output) if renew else
-                            self.session.recover(run_id, output, renew=False))
+                recovery = self.session.recover(run_id, output, renew=renew,
+                                                previous_runtime_id=info.get('sandbox_id'))
                 outcome = await asyncio.wait_for(recovery, self.timeout)
                 for channel in ('stdout', 'stderr'):
                     os.replace(recovered_logs / (channel + '.log'), self.fs.run_dir(run_id) / (channel + '.log'))

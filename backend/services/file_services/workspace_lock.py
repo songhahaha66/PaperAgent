@@ -49,19 +49,34 @@ def edit_lock(root):
 
 
 @asynccontextmanager
+async def _async_flock(stream):
+    while True:
+        try:
+            fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except BlockingIOError:
+            await asyncio.sleep(0.05)
+    try:
+        yield
+    finally:
+        fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@asynccontextmanager
 async def execution_lock(root, *, cache_key=None, allowed_leases=()):
     with _open(root,runtime=True) as stream:
-        while True:
-            try:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except BlockingIOError:
-                await asyncio.sleep(0.05)
-        try:
+        async with _async_flock(stream):
             _check_lease(root,cache_key=cache_key,allowed_leases=allowed_leases)
             yield
-        finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+
+
+@asynccontextmanager
+async def paper_build_lock(root):
+    path=private_root(project_root(root))/'paper-build.lock'
+    path.parent.mkdir(parents=True,exist_ok=True)
+    with path.open('a+b') as stream:
+        async with _async_flock(stream):
+            yield
 
 
 @contextmanager

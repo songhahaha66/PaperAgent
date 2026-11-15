@@ -46,7 +46,7 @@ def info(name, limit):
 
 def inventory(kind, names, limit):
     if names is None:
-        roots = {'python':['outputs','code'], 'runtime':[], 'inputs':['data','attachment','code','outputs/intermediate'],
+        roots = {'python':['outputs','code'], 'runtime':[], 'inputs':['data','attachment','code','config','outputs/intermediate'],
                  'compiler':['.build/latex','.build/reference.docx','.build/export.docx']}[kind]
         if kind in {'python','runtime'}:
             roots = [p.name for p in ROOT.iterdir() if p.is_dir() and not p.name.startswith('.')
@@ -63,7 +63,7 @@ def inventory(kind, names, limit):
                         if (Path(folder)/child).is_symlink(): raise ValueError('Cache symlink')
                     dirs[:] = [d for d in dirs if not d.startswith('.') and d not in PRIVATE | {'__pycache__','node_modules'}
                                and not (kind in {'python','runtime'} and Path(folder)==ROOT/'outputs' and d=='research')]
-                    names.extend((Path(folder)/f).relative_to(ROOT).as_posix() for f in files if not f.startswith('.'))
+                    names.extend((Path(folder)/f).relative_to(ROOT).as_posix() for f in files if not f.startswith('.') and f not in PRIVATE)
         if kind in {'python','runtime'}:
             names += [p.name for p in ROOT.iterdir() if p.is_file() and not p.name.startswith('.')
                       and p.name not in PRIVATE | {'paper.md','paper.tex','paper.pdf','paper.docx'}]
@@ -128,6 +128,10 @@ def operation(request):
         path(request['path']).unlink(missing_ok=True)
         return None
     if op=='inventory': return inventory(kind,request.get('paths'),limit)
+    if op=='prepare':
+        return {'inputs':inventory('inputs',None,limit),
+                'selected':inventory('python',request['paths'],limit),
+                'runtime':inventory('runtime',None,limit)}
     if op=='freeze': return freeze(request['run_id'],request['baseline'],kind,limit,request.get('paths'))
     if op=='install':
         source=path(request['temporary'],True); target=path(request['path']); target.parent.mkdir(parents=True,exist_ok=True)

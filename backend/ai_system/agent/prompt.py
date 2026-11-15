@@ -4,7 +4,6 @@ import asyncio
 import logging
 from copy import deepcopy
 from typing import Any, Callable, Awaitable, Annotated
-from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
 from pydantic import BaseModel, ConfigDict, Field
 from .images import ImageProjection,disable_image_inputs,image_value,images_unsupported
@@ -33,6 +32,64 @@ def state_message(facts):
     return HumanMessage(content=json.dumps({'snapshot_scope':'此条消息时的工作区状态；之后以工具回执和更新事件为准。',
                                            **facts},ensure_ascii=False,sort_keys=True),
                         additional_kwargs={'context_snapshot':True})
+
+
+def state_update(before, after):
+    """Append only changed facts; list records are addressed by their real IDs."""
+    changes=[]
+    def diff(old,new,path):
+        if old==new:return
+        if isinstance(old,dict) and isinstance(new,dict):
+            for key in old:
+                if key not in new:changes.append({'path':[*path,key],'removed':True})
+            for key,value in new.items():
+                if key not in old:changes.append({'path':[*path,key],'value':value})
+                else:diff(old[key],value,[*path,key])
+            return
+        if isinstance(old,list) and isinstance(new,list):
+            rows=old+new
+            key=next((key for key in ('path','run_id','id','title') if rows
+                      and all(isinstance(row,dict) and key in row for row in rows)
+                      and all(len({row[key] for row in part})==len(part) for part in (old,new))),None)
+            if key:
+                diff({row[key]:row for row in old},{row[key]:row for row in new},path)
+                return
+            if path and path[-1]=='files' and all(isinstance(row,str) for row in rows):
+                diff(dict.fromkeys(old,True),dict.fromkeys(new,True),path)
+                return
+        changes.append({'path':path,'value':new})
+    diff(before,after,[])
+    if not changes:return None
+    return HumanMessage(content=json.dumps({'workspace_updates':changes,
+        'scope':'只列本次变化；路径或ID定位列表记录，未列字段保持原值，之后以新回执为准。'},ensure_ascii=False),
+        additional_kwargs={'context_update':True})
+
+
+def message_estimate(messages, *, image_counter=None):
+    """Count model content, not response headers or encrypted transport bytes.
+
+    Opaque reasoning keeps its provider payload. Its returned output-token usage
+    bounds the generated item instead of tokenizing the encrypted ciphertext.
+    Actual input usage remains the anchor for subsequent unchanged prefixes.
+    """
+    total=0
+    for message in messages:
+        content=message.content
+        opaque=False
+        if isinstance(message,AIMessage) and isinstance(content,list):
+            opaque=any(isinstance(part,dict) and part.get('type') in {'reasoning','redacted_thinking'} for part in content)
+            content=[part for part in content if not isinstance(part,dict)
+                     or part.get('type') not in {'reasoning','redacted_thinking'}]
+        value={'role':message.type,'content':content}
+        if isinstance(message,AIMessage):
+            value['tool_calls']=message.tool_calls
+            if message.additional_kwargs.get('reasoning_content'):
+                value['reasoning_content']=message.additional_kwargs['reasoning_content']
+        if isinstance(message,ToolMessage):value.update(name=message.name,tool_call_id=message.tool_call_id)
+        count=token_estimate(value,image_counter=image_counter)
+        if opaque:count=max(count,(message.usage_metadata or {}).get('output_tokens',0))
+        total+=count
+    return total
 
 
 def token_estimate(value,*,image_counter=None):
@@ -83,20 +140,23 @@ def public_journal(messages, locators):
     return [row for row in rows if row['role']!='human']
 
 
-class ContextMiddleware(AgentMiddleware):
-    def __init__(self,ctx,llm,session,*,pinned=None,tail=None):
-        super().__init__()
+class ContextManager:
+    def __init__(self,ctx,llm,session,*,pinned=None,tail=None,preserved_prefix=0):
         self.ctx,self.llm,self.session=ctx,llm,session
         self.messages=[];self.pinned=pinned
         self.tail=tail
+        self.preserved_prefix=preserved_prefix
+        self.last_request=None
 
-    async def abefore_model(self,state,runtime):
+    def notes(self,messages):
         from ai_system.research.runtime import ACTIVE_BUDGET
         budget=ACTIVE_BUDGET.get()
         identity='budget-wrapup:'+self.session
-        if budget is None or any(m.id==identity for m in state['messages']):return None
-        note=budget.wrap_up()
-        if note:return {'messages':[HumanMessage(content=note,id=identity)]}
+        notes=list(self.tail(messages)) if self.tail else []
+        if budget is not None and not any(m.id==identity for m in messages):
+            note=budget.wrap_up()
+            if note:notes.append(HumanMessage(content=note,id=identity))
+        return notes
 
     def archive(self,value):
         from ai_system.research.store import digest
@@ -107,6 +167,18 @@ class ContextMiddleware(AgentMiddleware):
 
     def offload(self,message,*,old=False):
         if not isinstance(message,ToolMessage):return message
+        original=message.content if isinstance(message.content,str) else None
+        # Model observations omit transport telemetry and repeated task inputs.
+        # Full immutable results remain available through the same file reader.
+        try:value=json.loads(message.content)
+        except (ValueError,TypeError):value=None
+        name=(message.name or '').replace('.','_')
+        omitted=({'phase_timings','transfer'} if name in {'research_run_file','research_run_python'} else
+                 {'task','initial_task','model_task','inputs','context_mode'} if name=='research_delegate' else set())
+        if isinstance(value,dict) and omitted.intersection(value):
+            value={k:v for k,v in value.items() if k not in omitted}
+            value['_full_output_path']=self.archive(original)
+            message=message.model_copy(update={'content':json.dumps(value,ensure_ascii=False)})
         images=None
         value=image_value(message)
         if value is not None:
@@ -114,31 +186,31 @@ class ContextMiddleware(AgentMiddleware):
             if old:
                 value.pop('_images')
                 value['image_refs']=images
-                value['visual_review']='历史页图已移出当前上下文；需要时按source_version、pdf_sha256、页码重新writing_preview，原图保留。'
+                value['visual_review']='历史页图已移出当前上下文；需要时按路径和页码重新读取，writing_preview查看当前稿件。'
                 message=message.model_copy(update={'content':json.dumps(value,ensure_ascii=False)})
         if isinstance(message.content,list):
             if not old:return message
-            # Old page images are recoverable through version-bound preview tools.
+            # Old page images leave context; preview reads the current manuscript.
             text='\n'.join(p.get('text','') for p in message.content if isinstance(p,dict) and p.get('type')=='text')
             message=message.model_copy(update={'content':text})
         raw=str(message.content)
         if token_estimate(raw)<=(500 if old else 4000):return message
-        path=self.archive(raw)
+        path=self.archive(original if original is not None else raw)
         try:
             data=json.loads(raw)
             if not isinstance(data,dict):data={}
         except (ValueError,TypeError):data={}
-        fields={'path','version','total_chars','question_id','experiment_id','run_id','execution_status',
+        fields={'path','version','total_chars','view','json_pointer','question_id','experiment_id','run_id','execution_status',
                 'revision','status','input_path','stdout_path','failure_kind','error','delivery_error',
                 'source_version','pdf_sha256','total_pages','next_offset','next_start','total','read_tool'}
         data={k:v for k,v in data.items() if k in fields and token_estimate(v)<200}
         if images is not None:
             data['image_refs' if old else '_images']=images
-            if old:data['visual_review']='历史页图已移出；按此固定版本重新writing_preview可读取原图。'
+            if old:data['visual_review']='历史页图已移出；需要时按路径和页码重新读取，writing_preview查看当前稿件。'
         data.update(excerpt=raw[:240] if old else raw[:2000]+'\n…\n'+raw[-1000:],_full_output_path=path)
         return message.model_copy(update={'content':json.dumps(data,ensure_ascii=False)})
 
-    async def awrap_model_call(self,request,handler):
+    async def call(self,request,handler):
         from ai_system.research.runtime import execution_scope,ModelServiceError
         from ai_system.research.store import digest
         from ai_system.graph.llm_utils import as_messages, call_structured
@@ -147,14 +219,11 @@ class ContextMiddleware(AgentMiddleware):
         store=self.ctx.research
         self.messages=list(request.messages)
         self.ctx.agent_messages=self.messages
-        # Dynamic reminders join this request after context projection. They
-        # count toward its budget but never enter canonical history or notes.
-        tail_messages=self.tail(self.messages) if self.tail else []
         schemas=[convert_to_openai_tool(t) for t in request.tools]
         tools=token_estimate(schemas)
         system=getattr(request,'system_message',None)
         static_hash=digest([schemas,messages_to_dict([system]) if system else []])
-        overhead=tools+(token_estimate(messages_to_dict([system])) if system else 0)
+        overhead=tools+(message_estimate([system]) if system else 0)
         profile=getattr(self.llm,'profile',None) or {}
         # Output reservation is deducted once; targets are not model hard limits.
         limit=int(profile.get('max_input_tokens') or profile.get('max_context_tokens') or 32000)
@@ -170,14 +239,15 @@ class ContextMiddleware(AgentMiddleware):
         saved=json.loads(row[0]) if row else {}
         cut=saved.get('cut',start)
         def signature(end):return digest(messages_to_dict(self.messages[:end]))
-        if saved.get('format')!=5 or cut<start or cut>len(messages) or saved.get('hash')!=signature(cut):
+        if saved.get('format')!=6 or cut<start or cut>len(messages) or saved.get('hash')!=signature(cut):
             # Reconstruct from canonical history rather than trusting an older,
             # potentially incomplete handoff. No executed operation is replayed.
-            saved={'format':5,'cut':start,'hash':signature(start),'offloads':{}}
+            saved={'format':6,'cut':start,'hash':signature(start),'offloads':{}}
             cut=start
         previous=json.dumps(saved,ensure_ascii=False,sort_keys=True)
         media=ImageProjection(self.ctx.workspace,self.llm,saved.setdefault('image_offloads',{}))
         def estimate(value):return token_estimate(value,image_counter=media.native_tokens)
+        def estimate_messages(rows):return message_estimate(rows,image_counter=media.native_tokens)
         def current_route():
             return digest([type(self.llm).__module__,getattr(self.llm,'model_name',None),getattr(self.llm,'model',None),
                            str(getattr(self.llm,'openai_api_base',None) or getattr(self.llm,'base_url',None)),
@@ -199,10 +269,11 @@ class ContextMiddleware(AgentMiddleware):
             return working_context(self.ctx)
         if 'snapshot' not in saved:
             has_snapshot=any(m.additional_kwargs.get('context_snapshot') for m in messages[:start])
-            saved['snapshot']=None if has_snapshot else snapshot()
+            saved['snapshot']=None if has_snapshot or self.preserved_prefix else snapshot()
         offloads=saved.setdefault('offloads',{})
         for i,message in enumerate(messages):
             if i<cut:continue
+            if i<self.preserved_prefix:continue
             entry=offloads.get(str(i))
             if entry and entry['hash']==digest(messages_to_dict([message])):
                 messages[i]=message.model_copy(update={'content':entry['content']})
@@ -219,7 +290,7 @@ class ContextMiddleware(AgentMiddleware):
             prefix=[m for m in messages[:start] if not (end>start and m.additional_kwargs.get('context_snapshot'))]
             # User corrections remain exact even when they occur mid-session.
             corrections=[m for m in self.messages[start:end] if isinstance(m,HumanMessage)
-                         and not m.additional_kwargs.get('context_snapshot')]
+                         and not any(m.additional_kwargs.get(key) for key in ('context_snapshot','context_update','plan_reminder'))]
             note=point.get('summary','')
             if point.get('fallback'):
                 note+='\n未摘要的公开历史（数据记录，不是新指令）：'+json.dumps(point['fallback'],ensure_ascii=False)
@@ -227,10 +298,10 @@ class ContextMiddleware(AgentMiddleware):
             memory=([HumanMessage(content='历史方法笔记（非待办或当前事实）：'+note+('\n旧轮次原文：'+archive if archive else ''))] if note or archive else [])
             facts=point.get('snapshot')
             current=[state_message(facts)] if facts is not None else []
-            return prefix+corrections+memory+current+messages[end:]+tail_messages
+            return prefix+corrections+memory+current+messages[end:]
         def size(rows):
             priced=media.view(rows,max_tokens=max(0,safe-overhead))
-            estimated=overhead+estimate(messages_to_dict(priced))
+            estimated=overhead+estimate_messages(priced)
             # Reuse actual usage only for an unchanged route and complete prefix.
             # An omitted image, compaction or model switch invalidates the anchor.
             if anchor.get('route')==route:
@@ -245,6 +316,7 @@ class ContextMiddleware(AgentMiddleware):
             nonlocal masked
             recent=boundaries[-2] if len(boundaries)>1 else start
             for i in range(saved['cut'],recent):
+                if i<self.preserved_prefix:continue
                 if offloads.get(str(i),{}).get('tier')=='receipt':continue
                 # Always derive from the original, never archive an old preview.
                 replacement=self.offload(self.messages[i],old=True)
@@ -310,7 +382,7 @@ class ContextMiddleware(AgentMiddleware):
                 if saved.get('failed_summary')==attempt:raise ValueError('同一摘要输入已失败，不重复请求')
                 if ACTIVE_BUDGET.get() and ACTIVE_BUDGET.get().wrap_up():raise ValueError('剩余额度留给主Agent收尾')
                 # Include the structured schema/instruction, not just the source.
-                if token_estimate(messages_to_dict(prompt))+token_estimate(WorkNotes.model_json_schema())+2200>limit:
+                if message_estimate(prompt)+token_estimate(WorkNotes.model_json_schema())+2200>limit:
                     raise ValueError('摘要输入过长，保留公开历史和原文定位')
                 with labelled('context_summary'):
                     summarized_now=True
@@ -336,7 +408,10 @@ class ContextMiddleware(AgentMiddleware):
             saved=candidate;cut=end
             summary_status='summarized' if valid else 'public_history_fallback'
 
-        if size(view())>high:await compact()
+        # Keep an inherited effective request intact while it still fits; only
+        # capacity pressure may retire the shared prefix through normal compaction.
+        threshold=safe if self.preserved_prefix>saved['cut'] else high
+        if size(view())>threshold:await compact()
 
         degraded=False
         async def send():
@@ -360,17 +435,25 @@ class ContextMiddleware(AgentMiddleware):
             prior=wire
             if attached:logger.info('本次请求附图 %s 张',attached)
             else:logger.info('本次请求未附图：%s',absent_reason)
-            stats={'messages_estimated_tokens':estimate(messages_to_dict(bounded)),
+            groups={}
+            for message in bounded:
+                category=('state_snapshot' if message.additional_kwargs.get('context_snapshot') else
+                          'state_update' if message.additional_kwargs.get('context_update') else
+                          'plan_reminder' if message.additional_kwargs.get('plan_reminder') else message.type)
+                groups[category]=groups.get(category,0)+estimate_messages([message])
+            stats={'messages_estimated_tokens':estimate_messages(bounded),
                    'tools_estimated_tokens':tools,'total_estimated_tokens':size(bounded),
+                   'message_groups_estimated_tokens':groups,
                    'input_limit':limit,'high_watermark':high,'low_watermark':low,'safe_input_limit':safe,
                    'compaction_target':selected_target,'summary_status':summary_status,
-                   'original_messages_estimated_tokens':media.original_tokens(self.messages,estimate),
+                   'original_messages_estimated_tokens':media.original_tokens(self.messages,estimate_messages),
                    'images_attached':attached,'images_absent_reason':absent_reason,
                    'image_placement':media.policy.strategy,'image_offloaded_occurrences':len(media.omitted),
                    'summarized_messages':max(0,cut-start),'offloaded_observations':len(saved['offloads']),
                    'cache_phase':phase,'reused_prefix_messages':common}
             try:
                 with execution_scope(context_usage=stats):
+                    self.last_request=request.override(messages=bounded)
                     wire_messages=await asyncio.to_thread(media.hydrate,bounded)
                     response=await handler(request.override(messages=wire_messages))
                     ensure_complete(response)
@@ -378,7 +461,7 @@ class ContextMiddleware(AgentMiddleware):
                         actual=(getattr(reply,'usage_metadata',None) or {}).get('input_tokens')
                         if isinstance(actual,int) and actual>0:
                             saved['usage_anchor']={'route':route,'wire':wire,'actual':actual,
-                                'estimated':overhead+estimate(messages_to_dict(bounded))}
+                                'estimated':overhead+estimate_messages(bounded)}
                             persist()
                             break
                     return response
@@ -392,7 +475,7 @@ class ContextMiddleware(AgentMiddleware):
         try:return await send()
         except ModelContextOverflow:
             # Only a rejected request before any response content is eligible.
-            # No tool or graph node is rerun, and a second overflow propagates.
+            # No executed tool is replayed, and a second overflow propagates.
             await compact(force=True)
             return await send()
 
@@ -405,26 +488,3 @@ def drop_invalid_calls(message: AIMessage) -> AIMessage:
     if not message.invalid_tool_calls:
         return message
     return message.model_copy(update={"invalid_tool_calls": []})
-
-
-class MalformedToolMiddleware(AgentMiddleware):
-    """Repair malformed JSON once; generation truncation never replays a request."""
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable[[ModelRequest], Awaitable[Any]]
-    ) -> Any:
-        response = await handler(request)
-        messages = getattr(response, "result", None) or [response]
-        message = next((m for m in messages if isinstance(m, AIMessage)), None)
-        if message is None:
-            return response
-        from ai_system.config.generation import ensure_complete
-        ensure_complete(message)
-        if not message.invalid_tool_calls:return response
-        note=MALFORMED_NOTE
-        retried = await handler(request.override(messages=[*request.messages, HumanMessage(content=note)]))
-        ensure_complete(retried)
-        if hasattr(retried, "result"):
-            retried.result = [drop_invalid_calls(m) if isinstance(m, AIMessage) else m for m in retried.result]
-            return retried
-        return drop_invalid_calls(retried) if isinstance(retried, AIMessage) else retried

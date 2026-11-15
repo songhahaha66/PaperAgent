@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage,ToolMessage
 from ai_system.graph.context import GraphContext
 from ai_system.modules.registry import invoke
-from ai_system.research.loop import prepare_action,resume
+from ai_system.research.session import run_research,resume
 from ai_system.research.runtime import execution_scope,ResearchRuntime,ModelServiceError
 from ai_system.research.store import ResearchStore
 from research_tools_helpers import ResearchToolsModel, tool
@@ -55,9 +55,9 @@ def test_create_then_edit_and_correct_extra_fields_in_same_agent(tmp_path,extra)
         assert rows[-1].status=='error' and next(iter(extra)) in rows[-1].content
         return tool('research_edit_question',args,'fixed')
     ctx,model=context(tmp_path,respond)
-    assert asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))
     state=ctx.research.snapshot()
-    assert model.calls==4 and state['action']['capability']=='pause'
+    assert model.calls==4 and state['action'] is None
     assert len(state['questions'])==1 and not state['experiments'] and not state['executions']
     assert next(iter(state['questions'].values()))['question']=='Clarified goal'
     errors=[a for a in state['items'] if a['status']=='failed']
@@ -81,13 +81,14 @@ def test_question_committed_before_later_tool_failure_and_explicit_resume_keeps_
         assert rows[-1].status=='error'
         raise ModelServiceError('Controlled service interruption')
     ctx,model=context(tmp_path,respond);runtime=ResearchRuntime(tmp_path,'tools')
-    assert asyncio.run(prepare_action(ctx))
+    with pytest.raises(ModelServiceError,match='Controlled service interruption'):
+        asyncio.run(run_research(ctx))
     before=ctx.research.snapshot()
     assert len(before['questions'])==1 and not before['experiments'] and not before['executions']
     assert runtime.status()['used']==3
     assert any(a.get('question_id')=='stale-id' and a['status']=='failed' for a in before['items'])
     resume(ctx.research);corrected=True
-    assert asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))
     after=ctx.research.snapshot()
     assert after['questions']==before['questions'] and not after['experiments'] and not after['executions']
     assert runtime.status()['used']==model.calls==5
@@ -115,21 +116,22 @@ def test_no_progress_final_reply_cannot_spin_empty_observe(tmp_path):
         prompts.append(messages)
         return AIMessage(content='Thinking without changes')
     ctx,model=context(tmp_path,respond)
-    assert asyncio.run(prepare_action(ctx))
-    action=ctx.research.snapshot()['action']
-    assert action['error_type']=='NoResearchProgress' and model.calls==2
-    assert any('最终回复尚不能交付' in str(m.content) for m in prompts[1])
-    assert 'validation error' not in action['message']
+    from ai_system.agent.loop import NoResearchProgress
+    from ai_system.agent.store import AgentStore
+    with pytest.raises(NoResearchProgress,match='保存正文'):
+        asyncio.run(run_research(ctx))
+    assert model.calls==2 and AgentStore(tmp_path).session(ctx.research.research_id+'-lead')['status']=='failed'
+    assert any('保存正文' in str(m.content) for m in prompts[1])
 
 
 def test_user_resume_consumes_pause_and_runs_a_new_decision(tmp_path):
-    from ai_system.graph.agent import PaperGraphAgent
+    from ai_system.agent.agent import PaperAgent
     from services.chat_services.research_session import research_snapshot, validate_action
     def respond(messages):
         if model.calls==1:return tool('research_pause',{'message':'A required source is unavailable'},'pause')
         return tool('research_ask_user',{'message':'Please provide the source records.'},'ask')
     model=ResearchToolsModel(respond=respond)
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    agent=PaperAgent(model,workspace_dir=str(tmp_path))
     async def run():
         assert '研究已暂停' in await agent.run('Count the source observations.')
         store=ResearchStore(tmp_path,agent._load_thread())
@@ -137,13 +139,13 @@ def test_user_resume_consumes_pause_and_runs_a_new_decision(tmp_path):
         assert validate_action('resume',research_snapshot(tmp_path,'work','paused'))=='resume'
         assert await agent.resume_failed()=='Please provide the source records.'
         assert model.calls==2
-        assert store.snapshot()['action']['status']=='waiting'
+        assert store.snapshot()['pending_input']['message']=='Please provide the source records.'
         assert not (tmp_path/'paper.md').exists()
     asyncio.run(run())
 
 
 def test_shared_request_budget_after_user_answer_is_preserved_on_resume(tmp_path):
-    from ai_system.graph.agent import PaperGraphAgent
+    from ai_system.agent.agent import PaperAgent
     from ai_system.research.runtime import ACTIVE_BUDGET
     def respond(messages):
         ACTIVE_BUDGET.get().reserve('controlled-model')
@@ -151,13 +153,14 @@ def test_shared_request_budget_after_user_answer_is_preserved_on_resume(tmp_path
     model=ResearchToolsModel(respond=respond)
     runtime=ResearchRuntime(tmp_path)
     runtime.configure({'request_limit':1})
-    agent=PaperGraphAgent(model,workspace_dir=str(tmp_path))
+    agent=PaperAgent(model,workspace_dir=str(tmp_path))
     async def run():
         assert await agent.run('Count the source observations.')=='Which records?'
-        for output in (await agent.run('Use the supplied three records.',action='answer'),
-                       await agent.resume_failed()):
-            assert '研究已暂停' in output and '请求上限' in output
-            assert '已写入' not in output
+        output=await agent.run('Use the supplied three records.',action='answer')
+        assert '请求上限' in output and '已写入' not in output
+        from ai_system.research.runtime import ResearchBudgetExhausted
+        with pytest.raises(ResearchBudgetExhausted,match='请求上限'):
+            await agent.resume_failed()
         state=ResearchStore(tmp_path,agent._load_thread()).snapshot()
         assert state['outcome']=='blocked' and runtime.status()['used']==1
         assert len(runtime.requests())==1

@@ -4,7 +4,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage,HumanMessage,ToolMessage,messages_to_dict
 from ai_system.config.generation import ModelContextLimit,ModelContextOverflow
-from ai_system.graph.compaction import ContextMiddleware
+from ai_system.agent.prompt import ContextManager
 from ai_system.research.runtime import execution_links
 from helpers.context import delivery_context as context, ContextRequest as Request
 from research_tools_helpers import ResearchToolsModel,tool
@@ -25,9 +25,9 @@ def test_already_offloaded_results_shrink_from_original_before_summarizing(tmp_p
     original=messages_to_dict(history);sent=[];usage=[]
     async def handle(r):sent.append(messages_to_dict(r.messages));usage.append(execution_links()['context_usage'])
     async def run():
-        await ContextMiddleware(ctx,model,'receipts',pinned={}).awrap_model_call(Request(history),handle)
+        await ContextManager(ctx,model,'receipts',pinned={}).call(Request(history),handle)
         history.extend([tool('read_file',{'path':'last.txt'},'last'),ToolMessage('done',tool_call_id='last')])
-        await ContextMiddleware(ctx,model,'receipts',pinned={}).awrap_model_call(Request(history),handle)
+        await ContextManager(ctx,model,'receipts',pinned={}).call(Request(history),handle)
     asyncio.run(run())
     assert model.calls==0 and usage[0]['total_estimated_tokens']<10000
     assert sent[1][:len(sent[0])]==sent[0] and usage[1]['cache_phase']=='stable'
@@ -43,7 +43,7 @@ def test_soft_target_does_not_reject_large_legal_latest_turn(tmp_path):
              tool('run_python',{'code':'新'*16000},'recent'),ToolMessage('new',tool_call_id='recent')]
     sent=[];stats=[]
     async def handle(r):sent.append(r.messages);stats.append(execution_links()['context_usage'])
-    asyncio.run(ContextMiddleware(ctx,model,'soft',pinned={}).awrap_model_call(Request(history),handle))
+    asyncio.run(ContextManager(ctx,model,'soft',pinned={}).call(Request(history),handle))
     assert model.calls==1
     assert stats[0]['low_watermark']<stats[0]['total_estimated_tokens']<stats[0]['high_watermark']
     assert sent[0][-2].tool_calls==history[-2].tool_calls
@@ -61,8 +61,8 @@ def test_failed_summary_keeps_public_decisions_user_corrections_and_exact_source
     original=messages_to_dict(history);sent=[]
     async def handle(r):sent.append(r.messages)
     async def run():
-        await ContextMiddleware(ctx,model,'fallback',pinned={}).awrap_model_call(Request(history),handle)
-        await ContextMiddleware(ctx,model,'fallback',pinned={}).awrap_model_call(Request(history),handle)
+        await ContextManager(ctx,model,'fallback',pinned={}).call(Request(history),handle)
+        await ContextManager(ctx,model,'fallback',pinned={}).call(Request(history),handle)
     asyncio.run(run())
     saved=checkpoint(ctx,'fallback')
     assert model.calls==1 and saved['fallback'] and saved['cut']>1
@@ -89,7 +89,7 @@ def test_unsafe_failed_handoff_does_not_advance_checkpoint_or_retry_same_summary
     async def run():
         for _ in range(2):
             with pytest.raises(ModelContextLimit,match='原历史边界'):
-                await ContextMiddleware(ctx,model,'unsafe',pinned={}).awrap_model_call(Request(history),handle)
+                await ContextManager(ctx,model,'unsafe',pinned={}).call(Request(history),handle)
     asyncio.run(run())
     # The oversized input is rejected before even spending a summary request.
     assert model.calls==0 and checkpoint(ctx,'unsafe')['cut']==1
@@ -108,7 +108,7 @@ def test_rejected_context_recovers_once_without_replaying_tool_history(tmp_path,
         if len(sent)==1 or reject_twice:raise ModelContextOverflow('provider rejected')
         return AIMessage('继续原任务')
     async def run():
-        return await ContextMiddleware(ctx,model,'overflow',pinned={}).awrap_model_call(Request(history),handle)
+        return await ContextManager(ctx,model,'overflow',pinned={}).call(Request(history),handle)
     if reject_twice:
         with pytest.raises(ModelContextOverflow):asyncio.run(run())
     else:assert asyncio.run(run()).content=='继续原任务'
@@ -121,10 +121,10 @@ def test_huge_completed_turn_can_archive_but_pending_turn_cannot(tmp_path):
     ctx=context(tmp_path,model);history=[HumanMessage('original'),tool('run_python',{'code':'数据'*4000},'large')]
     async def handle(r):return r.messages
     with pytest.raises(ModelContextLimit):
-        asyncio.run(ContextMiddleware(ctx,model,'pending',pinned={}).awrap_model_call(Request(history),handle))
+        asyncio.run(ContextManager(ctx,model,'pending',pinned={}).call(Request(history),handle))
     assert model.calls==0
     history.append(ToolMessage('6',tool_call_id='large'))
-    sent=asyncio.run(ContextMiddleware(ctx,model,'closed',pinned={}).awrap_model_call(Request(history),handle))
+    sent=asyncio.run(ContextManager(ctx,model,'closed',pinned={}).call(Request(history),handle))
     assert model.calls==1 and not any(isinstance(m,AIMessage) for m in sent)
     assert '结果6' in str(sent) and history[1].tool_calls[0]['args']['code']=='数据'*4000
 
@@ -148,11 +148,11 @@ def test_multiple_compactions_restore_latest_conditions_and_archive_chain(tmp_pa
                 ai.additional_kwargs['reasoning_content']='private-reasoning'
                 history.extend([ai,ToolMessage(f'本轮已计算{call_id}',tool_call_id=call_id)])
             original=messages_to_dict(history)
-            await ContextMiddleware(ctx,model,'long',pinned={'epoch':epoch}).awrap_model_call(Request(history),handle)
+            await ContextManager(ctx,model,'long',pinned={'epoch':epoch}).call(Request(history),handle)
             assert messages_to_dict(history)==original
             states.append(checkpoint(ctx,'long'))
             # A process restart with identical history must reuse the projection.
-            await ContextMiddleware(ctx,model,'long',pinned={'epoch':epoch}).awrap_model_call(Request(history),handle)
+            await ContextManager(ctx,model,'long',pinned={'epoch':epoch}).call(Request(history),handle)
             assert messages_to_dict(sent[-1])==messages_to_dict(sent[-2])
     asyncio.run(run())
     assert model.calls==4 and all(a['cut']<b['cut'] for a,b in zip(states,states[1:]))
@@ -196,7 +196,7 @@ def test_real_client_overflow_compacts_and_resumes_without_executing_code_twice(
         original=messages_to_dict(history)
         async def handle(r):return await llm.ainvoke(r.messages)
         with budget_scope(tmp_path,ctx.research.research_id):
-            reply=await ContextMiddleware(ctx,llm,'wire',pinned={}).awrap_model_call(Request(history),handle)
+            reply=await ContextManager(ctx,llm,'wire',pinned={}).call(Request(history),handle)
         assert reply.content=='done' and messages_to_dict(history)==original
         assert len(ctx.fs._manifest['runs'])==1
         assert ctx.fs.read_text('outputs/count.txt')=='1'
@@ -223,7 +223,7 @@ def test_long_archived_argument_is_retrievable_with_valid_paginated_file_calls(t
     history=[HumanMessage('original'),tool('run_python',{'code':code},'large'),ToolMessage('6',tool_call_id='large')]
     async def handle(r):return r.messages
     async def run():
-        await ContextMiddleware(ctx,model,'pages',pinned={}).awrap_model_call(Request(history),handle)
+        await ContextManager(ctx,model,'pages',pinned={}).call(Request(history),handle)
         saved=checkpoint(ctx,'pages')
         source=next(r for r in saved['fallback'] if r.get('tool_calls'))['source']
         assert source['limit']<=24000 and source['end']-source['start']>24000
@@ -247,7 +247,7 @@ def test_parallel_pending_tools_and_required_reasoning_remain_atomic(tmp_path):
     history.extend([parallel,ToolMessage('first reply',tool_call_id='a')])
     original=messages_to_dict(history)
     async def handle(r):return r.messages
-    sent=asyncio.run(ContextMiddleware(ctx,model,'parallel',pinned={}).awrap_model_call(Request(history),handle))
+    sent=asyncio.run(ContextManager(ctx,model,'parallel',pinned={}).call(Request(history),handle))
     assert messages_to_dict(sent[-2:])==messages_to_dict(history[-2:])
     assert messages_to_dict(history)==original
     assert checkpoint(ctx,'parallel')['cut']<=len(history)-2
@@ -258,5 +258,5 @@ def test_partial_generation_context_error_is_not_replayed_as_a_rejected_request(
     ctx=context(tmp_path,model);calls=[]
     async def handle(r):calls.append(r);raise ModelContextLimit('generation already started')
     with pytest.raises(ModelContextLimit):
-        asyncio.run(ContextMiddleware(ctx,model,'partial',pinned={}).awrap_model_call(Request([HumanMessage('work')]),handle))
+        asyncio.run(ContextManager(ctx,model,'partial',pinned={}).call(Request([HumanMessage('work')]),handle))
     assert len(calls)==1 and model.calls==0

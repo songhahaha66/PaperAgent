@@ -8,11 +8,10 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from langgraph.checkpoint.memory import InMemorySaver
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from ai_system.graph import PaperGraphAgent, ResultRegistry, compile_graph
+from ai_system.graph import PaperAgent, ResultRegistry
 from ai_system.research.store import ResearchStore
 from services.file_services.workspace_fs import WorkspaceFS
 
@@ -39,17 +38,15 @@ def test_graph_end_to_end_offline(tmp_path):
     ctx.research.initialize(TASK)
 
     async def go():
-        graph = compile_graph(InMemorySaver())
+        from ai_system.research.session import run_research
         try:
-            return await graph.ainvoke(
-                {"research_blocked": False}, {"configurable": {"thread_id": "t"}, "recursion_limit": 100}, context=ctx
-            )
+            return await run_research(ctx)
         finally:
             await ctx.kernels.close()
 
     checkpoint = asyncio.run(go())
-    assert set(checkpoint) == {"research_blocked"}
-    result = PaperGraphAgent._result(ctx)
+    assert checkpoint['status']=='completed'
+    result = PaperAgent._result(ctx)
 
     business=ctx.research.snapshot()
     assert len(business['questions'])==2 and not business['experiments'] and not business['executions']
@@ -61,7 +58,7 @@ def test_graph_end_to_end_offline(tmp_path):
     manifest=json.loads((workspace_path(ws, 'manifest.json')).read_text())['runs']
     assert len(manifest)==4 and all(run['status']=='success' for run in manifest.values())
     assert all(sum(r['question_id']==qid for r in manifest.values())==2 for qid in business['questions'])
-    exported=(ws/'code/research_solution.py').read_text(encoding='utf-8')
+    exported=(ws/'outputs/code-history/research_solution.py').read_text(encoding='utf-8')
     assert 'forecast = 1234.5678' in exported and 'plt.plot' in exported
     assert not any(a.get('tool_name')=='experiments.execute' for a in business['items'])
     registry=ResultRegistry.load(WorkspaceFS(str(ws)))
@@ -89,33 +86,23 @@ def test_graph_end_to_end_offline(tmp_path):
 # ----------------------------------------------------------------------
 
 
-def test_malformed_tool_call_is_retried_and_never_left_in_history():
-    from ai_system.graph.compaction import MALFORMED_NOTE, MalformedToolMiddleware, drop_invalid_calls
-
-    class Request:
-        def __init__(self, messages):
-            self.messages = messages
-
-        def override(self, messages):
-            return Request(messages)
-
-    bad = {"name": "run_python", "args": '{"code": "print(1', "id": "c1", "error": "bad json", "type": "invalid_tool_call"}
-    seen = []
-
-    async def handler(request):
-        seen.append(request.messages)
-        return AIMessage(content="", invalid_tool_calls=[bad], response_metadata={"finish_reason": "tool_calls"})
-
-    result = asyncio.run(MalformedToolMiddleware().awrap_model_call(Request([HumanMessage(content="go")]), handler))
-    assert len(seen) == 2 and seen[1][-1].content == MALFORMED_NOTE
-    # 重试仍然坏掉时，坏调用不留在历史里（否则下一次请求被接口以"工具调用没有结果"拒绝）
-    assert result.invalid_tool_calls == []
-    assert drop_invalid_calls(AIMessage(content="x")).content == "x"
+def test_malformed_tool_call_is_retried_and_never_left_in_history(tmp_path):
+    from ai_system.agent.loop import AgentLoop,run_session
+    from research_tools_helpers import ResearchToolsModel
+    from helpers.context import session_context
+    bad={'name':'run_python','args':'{"code": "print(1','id':'c1','error':'bad json','type':'invalid_tool_call'}
+    def respond(messages):
+        if any('工具参数不是有效JSON' in str(message.content) for message in messages):return AIMessage(content='已纠正。')
+        return AIMessage(content='',invalid_tool_calls=[bad],response_metadata={'finish_reason':'tool_calls'})
+    model=ResearchToolsModel(respond=respond);ctx=session_context(tmp_path,model)
+    result=asyncio.run(run_session(AgentLoop(model,[],'Correct malformed arguments.',ctx=ctx),'malformed',[HumanMessage(content='go')],ctx=ctx))
+    assert model.calls==2 and result['messages'][-1].content=='已纠正。'
+    assert all(not message.invalid_tool_calls for message in result['messages'] if isinstance(message,AIMessage))
 
 
 def test_explicit_new_run_does_not_resume_an_interrupted_plan(tmp_path):
     ws = _make_workspace(tmp_path)
-    agent = PaperGraphAgent(FakeModel(), workspace_dir=str(ws))
+    agent = PaperAgent(FakeModel(), workspace_dir=str(ws))
     asyncio.run(agent.run(TASK))
     first_thread = agent._load_thread()
     assert not agent.waiting_confirm

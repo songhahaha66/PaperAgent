@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from ai_system.graph.compaction import ContextMiddleware, WorkNotes, summary_model
+from ai_system.agent.prompt import ContextManager, WorkNotes, summary_model
 from ai_system.modules.registry import invoke
 from ai_system.research.store import ResearchStore
 from ai_system.research.runtime import execution_links
@@ -19,11 +19,11 @@ def test_full_context_budget_includes_system_facts_and_summary_once(tmp_path):
     for i in range(12):
         history += [tool('run_python',{'code':'计算'*500},str(i)),ToolMessage(str(i),tool_call_id=str(i))]
     system=SystemMessage('固定约束'*150);sent=[];usage=[]
-    middleware=ContextMiddleware(ctx,model,'whole',pinned={'current':'当前事实'*80})
+    middleware=ContextManager(ctx,model,'whole',pinned={'current':'当前事实'*80})
     async def handle(r):sent.append(r.messages);usage.append(execution_links()['context_usage'])
     async def run():
-        await middleware.awrap_model_call(Request(history,system),handle)
-        await middleware.awrap_model_call(Request(history,system),handle)
+        await middleware.call(Request(history,system),handle)
+        await middleware.call(Request(history,system),handle)
         # Retrieve a detail removed from the active context through the same file API.
         pointer=next(m.content for m in sent[0] if '旧轮次原文' in str(m.content)).split('旧轮次原文：')[1]
         restored=await invoke(ctx,'research.read_artifact',path=pointer)
@@ -42,7 +42,7 @@ def test_unshrinkable_latest_call_is_not_rewritten_or_sent_over_budget(tmp_path)
     ctx=context(tmp_path,model);history=[HumanMessage('original'),tool('run_python',{'code':'数据'*4000},'open')]
     async def handle(_):pytest.fail('Do not send over budget')
     with pytest.raises(ModelContextLimit,match='完整工具轮次'):
-        asyncio.run(ContextMiddleware(ctx,model,'oversize').awrap_model_call(Request(history),handle))
+        asyncio.run(ContextManager(ctx,model,'oversize').call(Request(history),handle))
     assert history[1].tool_calls[0]['args']['code']=='数据'*4000
 
 
@@ -80,7 +80,7 @@ def test_backend_manuscript_and_inputs_share_paginated_versioned_file_tools(tmp_
 
 @pytest.mark.usefixtures('offline_kernel')
 def test_natural_final_reply_uses_same_publication_without_recomputation(tmp_path):
-    from ai_system.graph.agent import PaperGraphAgent
+    from ai_system.agent.agent import PaperAgent
     from helpers.graph import FakeModel,TASK
     class NaturalFinal(FakeModel):
         def _research_step(self,messages,plan):
@@ -88,7 +88,7 @@ def test_natural_final_reply_uses_same_publication_without_recomputation(tmp_pat
             if reply.tool_calls and reply.tool_calls[0]['name']=='research_deliver':
                 return AIMessage(content='已完成计算与正文，结果与局限见文件。')
             return reply
-    agent=PaperGraphAgent(NaturalFinal(),workspace_dir=str(tmp_path))
+    agent=PaperAgent(NaturalFinal(),workspace_dir=str(tmp_path))
     assert 'paper.md' in asyncio.run(agent.run(TASK))
     state=ResearchStore(tmp_path,agent._load_thread()).snapshot()
     assert state['outcome']=='completed' and not state['experiments']
@@ -96,15 +96,15 @@ def test_natural_final_reply_uses_same_publication_without_recomputation(tmp_pat
 
 
 def test_final_reply_can_deliver_without_answer_metadata_but_waits_for_files(tmp_path):
-    from ai_system.research.loop import prepare_action
+    from ai_system.research.session import run_research
     ctx=context(tmp_path,ResearchToolsModel(respond=lambda _:AIMessage(content='完成了。')))
     (tmp_path/'paper.md').write_text('# 当前稿件，未完成部分已说明')
-    assert not asyncio.run(prepare_action(ctx))
-    assert ctx.research.snapshot()['publication']['stage']=='export'
+    assert asyncio.run(run_research(ctx))['status']=='completed'
+    assert ctx.research.snapshot()['delivery_stages']['export']['status']=='completed'
     async def pending():
         q=await invoke(ctx,'research.create_question',question='结果是多少？')
         rid=ctx.fs.create_run();ctx.fs.get_run_info(rid).update(scope='research',research_id=ctx.research.research_id,status='success',delivery_error='not downloaded')
-        with pytest.raises(ValueError,match='尚未确认'):
+        with pytest.raises(ValueError,match='尚未完成'):
             await invoke(ctx,'research.deliver',reason='准备交付')
         assert ctx.research.snapshot()['publication'] is None
     # A new instruction can repair the interrupted decision without replaying it.
@@ -123,7 +123,7 @@ def test_historical_unknown_execution_does_not_block_current_delivery(tmp_path):
         old.update(scope='research',research_id=ctx.research.research_id,status='error',
                    failure_kind='transport_unknown',error='早期初始化未确认，未采用其结果')
         await invoke(ctx,'research.deliver',reason='当前结果和正文已完成，保留早期失败记录。')
-        assert ctx.research.snapshot()['publication']['stage']=='export'
+        assert ctx.research.snapshot()['delivery_stages']['export']['status']=='completed'
         assert old['status']=='error' and old['failure_kind']=='transport_unknown'
         assert list(ctx.fs._manifest['runs'])==[rid]
     asyncio.run(run())

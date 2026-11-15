@@ -17,6 +17,22 @@ import subprocess
 import sys
 import time
 import traceback
+from importlib.metadata import version, PackageNotFoundError
+
+
+def environment():
+    memory=Path('/sys/fs/cgroup/memory.max')
+    raw=memory.read_text().strip() if memory.exists() else ''
+    cpu=Path('/sys/fs/cgroup/cpu.max')
+    quota=cpu.read_text().split() if cpu.exists() else []
+    packages={}
+    for name in ('numpy','scipy','pandas','matplotlib','openpyxl'):
+        try:packages[name]=version(name)
+        except PackageNotFoundError:pass
+    return {'python':sys.version.split()[0],
+            'memory_limit_bytes':int(raw) if raw.isdigit() else None,
+            'cpu_limit':int(quota[0])/int(quota[1]) if quota and quota[0]!='max' else os.cpu_count(),
+            'packages':packages}
 
 
 def atomic_json(path, value):
@@ -119,7 +135,7 @@ def _zombie(pid):
     try:
         stat = Path(f'/proc/{pid}/stat').read_text()
     except FileNotFoundError:
-        return True
+        return sys.platform == 'linux'
     except OSError:
         return False
     end = stat.rfind(')')
@@ -234,6 +250,7 @@ def supervise(root, job_id, lock_fd):
             proc.wait()
         atomic_json(target / 'done.json', {'job_id': job_id, 'exit_code': proc.returncode if proc else 127,
                     'duration_seconds': time.monotonic() - started, 'stop_reason': reason,
+                    'environment':environment(),
                     'error': error, 'log_bytes': sizes})
         os.close(lock_fd)
 

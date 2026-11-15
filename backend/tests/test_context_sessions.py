@@ -59,16 +59,15 @@ def test_missing_response_reconciles_committed_code_instead_of_replaying(tmp_pat
 
 
 @pytest.mark.usefixtures('offline_kernel')
-@pytest.mark.parametrize('mode',['isolated','fork'])
 @pytest.mark.parametrize('content_blocks',[False,True])
-def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,mode,content_blocks):
+def test_isolated_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,content_blocks):
     from ai_system.modules.registry import invoke
     seen=[]
     answer='计算结果12；结果文件outputs/result.txt；已检查输入。'
     def child(messages):
         seen.append(messages)
         rows=[m for m in messages if isinstance(m,ToolMessage)]
-        if not rows:return tool('run_python',{'code':"from pathlib import Path\nassert Path('attachment/assigned.txt').read_text()=='6'\nassert not Path('attachment/unassigned.txt').exists()\nPath('outputs/result.txt').write_text('12')\nprint(12)"},'child-code')
+        if not rows:return tool('run_python',{'code':"from pathlib import Path\nassert Path('attachment/assigned.txt').read_text()=='6'\nassert Path('config/parameters.json').read_text()=='{\"factor\":2}'\nassert not Path('attachment/unassigned.txt').exists()\nPath('outputs/result.txt').write_text('12')\nprint(12)"},'child-code')
         if len(rows)==1:return tool('read_file',{'path':'outputs/result.txt'},'read-result')
         assert '12' in rows[1].content and rows[1].status=='success'
         return AIMessage(content=[
@@ -78,9 +77,10 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     model=ResearchToolsModel(respond=child);ctx=context(tmp_path,model)
     folder=tmp_path/'attachment';folder.mkdir(exist_ok=True)
     (folder/'assigned.txt').write_text('6');(folder/'unassigned.txt').write_text('not assigned')
+    ctx.fs.write_text('config/parameters.json','{"factor":2}')
     ctx.agent_messages=[HumanMessage(content='parent-context-marker')]
     async def run():
-        result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt'])
+        result=await invoke(ctx,'research.delegate',task='独立计算',files=['attachment/assigned.txt','config/parameters.json'])
         assert result['status']=='completed' and len(result['run_ids'])==1
         assert result['answer']==answer
         items=ctx.research.snapshot()['items']
@@ -93,7 +93,7 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
         with AgentStore(tmp_path).connect() as db:
             thread=json.loads(db.execute('SELECT payload FROM threads WHERE id=?',(child[0]['thread_id'],)).fetchone()[0])
         assert thread['parent_item_id']==parent['id']
-        assert bool(any('parent-context-marker' in str(m.content) for m in seen[0]))==(mode=='fork')
+        assert not any('parent-context-marker' in str(m.content) for m in seen[0])
         actual=[p for p in result['files'] if p.endswith('/outputs/result.txt')]
         assert len(actual)==1 and ctx.fs.canonical_artifact(actual[0]).read_text()=='12'
         assert ctx.fs.get_run_info(result['run_ids'][0])['status']=='success'
@@ -108,14 +108,14 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
 
 
 def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp_path):
-    from ai_system.graph.compaction import ContextMiddleware
+    from ai_system.agent.prompt import ContextManager
     prompts=[]
     def summarize(messages):
         prompts.append(messages)
         assert 'private-reasoning-marker' not in str(messages)
         return AIMessage(content=json.dumps({'notes':['效率0.95；修正了递推实现。']}))
     model=ResearchToolsModel(respond=summarize,profile={'max_input_tokens':7000})
-    ctx=context(tmp_path,model);middleware=ContextMiddleware(ctx,model,'compression')
+    ctx=context(tmp_path,model);middleware=ContextManager(ctx,model,'compression')
     messages=[SystemMessage(content='保持参数和未知。'),HumanMessage(content='hard efficiency=0.95')]
     for i in range(9):
         messages += [tool('run_python',{'code':'long_code = '+repr('校验'*700)},str(i)),ToolMessage(content='真实输出'+str(i),tool_call_id=str(i),name='run_python')]
@@ -123,8 +123,8 @@ def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp
     sent=[]
     async def handler(request):sent.append(request.messages);return None
     async def run():
-        await middleware.awrap_model_call(Request(messages),handler)
-        await middleware.awrap_model_call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
     asyncio.run(run())
     assert model.calls==1 and len(sent[0])<len(messages)
     assert sent[0][1].content=='hard efficiency=0.95'

@@ -5,7 +5,6 @@ model output are not public messages. Legacy progress wrappers remain readable.
 """
 import hashlib
 import re
-from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage
 
 PROGRESS_PROMPT = """
@@ -32,26 +31,8 @@ def public_progress(content):
     return [content] if content else []
 
 
-class ProgressMiddleware(AgentMiddleware):
-    def __init__(self, events, *, scope):
-        super().__init__()
-        self.events = events
-        self.scope = scope
-        self.seen = set()
-
-    async def awrap_model_call(self, request, handler):
-        response = await handler(request)
-        for message in response.result:
-            if not isinstance(message, AIMessage):
-                continue
-            identity = message.id or hashlib.sha256(
-                (str(message.content) + str(message.tool_calls)).encode()).hexdigest()
-            for index, text in enumerate(public_progress(message.content)):
-                key = hashlib.sha256(f'{self.scope}:{identity}:{index}'.encode()).hexdigest()
-                if key in self.seen:
-                    continue
-                await self.events.emit('research_commentary', {
-                    'id': key, 'text': text, 'scope': self.scope,
-                })
-                self.seen.add(key)
-        return response
+async def publish_progress(events, message, *, scope):
+    identity=message.id
+    for index,text in enumerate(public_progress(message.content)):
+        key=hashlib.sha256(f'{scope}:{identity}:{index}'.encode()).hexdigest()
+        await events.emit('research_commentary',{'id':key,'text':text,'scope':scope})

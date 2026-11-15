@@ -8,7 +8,7 @@ import pytest
 from langchain_core.messages import ToolMessage
 
 from helpers.graph import FakeModel, _make_workspace, _Structured, TASK, FAIL_ONCE
-from ai_system.graph.agent import PaperGraphAgent
+from ai_system.agent.agent import PaperAgent
 from ai_system.research.store import ResearchStore
 from services.chat_services.research_session import research_snapshot
 
@@ -39,7 +39,7 @@ def no_retries_or_state_leaks(monkeypatch):
 
 def agent_for(tmp_path, *, fail_title_once="", **options):
     ws = _make_workspace(tmp_path)
-    return PaperGraphAgent(VersionAwareModel(fail_title_once=fail_title_once), workspace_dir=str(ws), **options)
+    return PaperAgent(VersionAwareModel(fail_title_once=fail_title_once), workspace_dir=str(ws), **options)
 
 
 def test_new_engine_selective_revision_preserves_unrelated_results_and_sections(tmp_path):

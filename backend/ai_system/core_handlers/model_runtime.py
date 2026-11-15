@@ -89,8 +89,8 @@ def reply_usage(reply):
 
 
 def reservation(model,args,kwargs):
-    from ..graph.compaction import token_estimate
-    from ..graph.images import ImageProjection
+    from ..agent.prompt import token_estimate
+    from ..agent.images import ImageProjection
     from langchain_core.messages import messages_to_dict
     messages=args[0] if args else kwargs.get('messages',[])
     try:body=messages_to_dict(messages)

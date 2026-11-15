@@ -9,7 +9,7 @@ from langchain_core.messages import ToolMessage
 
 from ai_system.modules.registry import capabilities, invoke
 from ai_system.research import operations
-from ai_system.research.loop import prepare_action, _act
+from ai_system.research.session import run_research
 from ai_system.research.planner import working_context
 from ai_system.research.store import ResearchStore
 from ai_system.research.views import questions
@@ -62,10 +62,8 @@ predictions.to_csv('outputs/intermediate/predictions.csv',index=False)
     ctx=session_context(tmp_path,ResearchToolsModel(respond=respond))
     async def scenario():
         try:
-            assert not await prepare_action(ctx)
-            action=ctx.research.snapshot()['action']
-            assert action['capability']=='writing.export'
-            await _act({'action_id':action['id']},SimpleNamespace(context=ctx))
+            assert (await run_research(ctx))['status']=='completed'
+            assert ctx.research.snapshot()['action'] is None
         finally:await ctx.kernels.close()
     asyncio.run(scenario())
     state=ctx.research.snapshot()

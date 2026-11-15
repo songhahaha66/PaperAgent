@@ -148,7 +148,8 @@ def inherit_execution_files(source, target_fs, experiment_id, *, run_ids=None):
             copy_file(path)
             target_fs._manifest['files'][path] = deepcopy(meta)
     # The exported solution is produced outside the kernel, so has no run ID.
-    copy_file(f'code/{experiment_id}_solution.py')
+    from ai_system.modules.experiments.execution import solution_code_path
+    copy_file(solution_code_path(experiment_id))
     target_fs._save_manifest()
     return selected
 

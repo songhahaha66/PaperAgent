@@ -6,7 +6,7 @@ import pytest
 from langchain_core.messages import HumanMessage
 
 from ai_system.graph.message_graph import (
-    MessageIntent, MessageContext, build_message_graph, resolve_intent,
+    MessageIntent, MessageContext, route_message, resolve_intent,
 )
 from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.research_session import ResearchSnapshot
@@ -47,7 +47,7 @@ def test_graph_routes_from_structured_model_and_commits_before_dispatch(tmp_path
         captured.append(route)
     ctx = MessageContext(model, root, state, turn['content'], [{'role':'user','content':'2025年'}],
                          None, 'auto', history, 'work', turn, execute)
-    asyncio.run(build_message_graph().ainvoke({}, context=ctx))
+    asyncio.run(route_message(ctx))
     assert model.calls == 1 and captured[0]['action'] == expected
     assert captured[0]['scope'] == 'Q1'
     assert captured[0]['base_revision'] == 2
@@ -67,9 +67,9 @@ def test_failed_dispatch_reuses_saved_classification_without_another_model_call(
         return MessageContext(model, root, snapshot(), turn['content'], [], None,
                               'auto', history, 'work', turn, execute)
     with pytest.raises(ConnectionError):
-        asyncio.run(build_message_graph().ainvoke({}, context=context(turn)))
+        asyncio.run(route_message(context(turn)))
     recovered = history.begin_turn('work', 'user:retry', '解释已有结果')
-    asyncio.run(build_message_graph().ainvoke({}, context=context(recovered)))
+    asyncio.run(route_message(context(recovered)))
     assert model.calls == 1 and attempts[0] == attempts[1]
     assert len(history.get_messages('work')) == 1
     history.update_turn('work', turn['id'], turn_status='completed')
@@ -104,5 +104,5 @@ def test_bad_classification_never_falls_back_to_execution(tmp_path):
         pytest.fail('invalid classification must not execute')
     ctx=MessageContext(model,root,snapshot(),turn['content'],[],None,'auto',history,'work',turn,execute)
     with pytest.raises(ValueError):
-        asyncio.run(build_message_graph().ainvoke({},context=ctx))
+        asyncio.run(route_message(ctx))
     assert 'routing' not in history.get_messages('work')[0]['metadata']

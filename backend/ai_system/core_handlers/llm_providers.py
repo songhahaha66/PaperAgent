@@ -185,13 +185,17 @@ class OpenAIProvider(BaseLLMProvider):
                                        "type": "enabled" if self.config.get('thinking_enabled') else "disabled"}}
 
         model_class = AIGWChatOpenAI if gateway_host else MeteredChatOpenAI
+        official_terra = (self.model_id == 'gpt-6.1-terra'
+                          and urlparse(self.base_url or 'https://api.openai.com').hostname == 'api.openai.com')
         from ..research.runtime import request_hook,response_hook,async_request_hook,async_response_hook
         return model_class(
             model=self.model_id,
             api_key=self.api_key,
             base_url=normalize_openai_base_url(self.base_url) if self.base_url else None,
+            # Terra tool calls require Responses; reasoning disallows temperature.
+            use_responses_api=True if official_terra else None,
             reasoning_effort=kwargs.get('reasoning_effort'),
-            temperature=kwargs.get('temperature', 0.7),
+            temperature=None if official_terra else kwargs.get('temperature', 0.7),
             max_tokens=kwargs.get('max_tokens', 16000),
             streaming=kwargs.get('streaming', True),
             # RuntimeModelMixin owns bounded service retries; the SDK never multiplies them.

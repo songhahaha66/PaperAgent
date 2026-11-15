@@ -21,45 +21,6 @@ def refresh_registry(ctx):
     ctx.registry.save()
 
 
-async def observe(state, runtime):
-    ctx = runtime.context
-    store = ctx.research
-    if store.snapshot() is None:
-        raise ValueError("研究状态不存在，不能从 checkpoint 恢复业务数据")
-    snapshot = store.refresh_inputs()
-    from ai_system.modules.experiments.execution import recover_outputs
-    try:
-        await recover_outputs(ctx)
-    finally:
-        await ctx.kernels.disconnect()
-    if ctx.experience_scope is not None:
-        try:
-            from ai_system.modules.registry import execute_internal_sync
-            execute_internal_sync(ctx, 'experience.candidates')
-        except Exception:
-            await ctx.events.stage('经验索引暂不可用，研究继续；可在经验面板补建')
-    ctx.skill_policy = store.skill_preferences()['policy']
-    refresh_registry(ctx)
-    if 'materials' not in snapshot:
-        with store._transaction() as db:
-            saved=store._read(db)
-            saved['materials']={'inputs':store.file_inputs(),'profile':''}
-            store._save(db,saved,'materials_profiled',saved['materials'])
-    from .loop import prepare_action
-    blocked = await prepare_action(ctx)
-    snapshot = store.snapshot()
-    refresh_registry(ctx)
-    if blocked:
-        store.set_outcome('blocked')
-        from .planner import decision_block_message
-        await ctx.set_stage('solve','blocked',decision_block_message(store,snapshot))
-    elif snapshot['outcome'] not in {'completed','needs_attention'}:
-        store.set_outcome('running')
-    snapshot = store.snapshot()
-    await ctx.events.emit('research_state', public_snapshot(snapshot,source_root=ctx.research.root))
-    return {'research_blocked': blocked}
-
-
 def graph_view(snapshot, root=None):
     from .views import questions
     publication=snapshot['publication'] or {}

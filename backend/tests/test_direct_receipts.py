@@ -36,7 +36,7 @@ def test_new_questions_and_public_code_need_no_experiment_or_acceptance(tmp_path
 
 
 def test_retained_tool_history_keeps_executable_code_and_reasoning(tmp_path):
-    from ai_system.graph.compaction import ContextMiddleware
+    from ai_system.agent.prompt import ContextManager
     from research_tools_helpers import ResearchToolsModel,tool
     ctx=context(tmp_path)
     messages=[]
@@ -49,7 +49,7 @@ def test_retained_tool_history_keeps_executable_code_and_reasoning(tmp_path):
     sent=[]
     async def handler(r):sent.extend(r.messages)
     model=ResearchToolsModel(respond=lambda m:AIMessage(content='notes'))
-    asyncio.run(ContextMiddleware(ctx,model,'reduce-code').awrap_model_call(Request(messages),handler))
+    asyncio.run(ContextManager(ctx,model,'reduce-code').call(Request(messages),handler))
     assert next(m for m in sent if isinstance(m,AIMessage)).tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')
     assert all(m.additional_kwargs['reasoning_content']=='offline reasoning' for m in sent if isinstance(m,AIMessage))
     assert messages[0].tool_calls[0]['args']['code']==ctx.fs.read_text('code/cell_0.py')

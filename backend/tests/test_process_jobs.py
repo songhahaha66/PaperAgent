@@ -235,6 +235,22 @@ def test_dead_supervisor_without_receipt_is_gone_and_fresh_submit_is_still_runni
         sleeper.wait()
     assert not job_worker._pid_alive(sleeper.pid)
 
+    async def replaced_runtime():
+        session=ProcessJobs(tmp_path/'backend',tmp_path/'replacement')
+        target=job_worker.directory(session.root,'missing-submission')
+        (target/'stdout.log').write_text('原任务留下的日志\n')
+        logs=[]
+        async def output(channel,text):logs.append(text)
+        result=await asyncio.wait_for(session.recover('missing-submission',output,
+            previous_runtime_id='deleted-container'),2)
+        assert result.stop_reason=='lost' and '原任务留下的日志' in ''.join(logs)
+        assert not any(op=='submit' for op,_ in session.operations)
+        async def deleted(*args):raise RuntimeError('Sandbox not found')
+        session._job_rpc=deleted
+        with pytest.raises(RuntimeError,match='Sandbox not found'):
+            await session.poll('missing-submission',output)
+    asyncio.run(replaced_runtime())
+
     async def check():
         session = object.__new__(OpenSandboxSession)
         async def rpc(operation, run_id, argument=None):

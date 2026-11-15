@@ -75,7 +75,9 @@ def operation_detail(root, item):
         elif item.get('status') == 'completed' and type(output.get('warning_count')) is int:
             parts.append(f"{output['warning_count']} 条编译警告")
         return '；'.join(parts)
-    if capability == 'writing.edit':
+    if capability in {'writing.edit','workspace.edit'}:
+        if inputs.get('edit_mode')=='append' and item.get('status') in {'completed','running'}:
+            return '已追加正文。' if item.get('status')=='completed' else '正在追加正文。'
         if item.get('status') == 'completed':return '已保存局部修改。' if inputs.get('edit_mode') == 'replace' else '已保存文件。'
         if item.get('status') == 'running':return '正在替换指定原文。' if inputs.get('edit_mode') == 'replace' else '正在保存文件。'
     if capability == 'writing.use_asset':
@@ -94,6 +96,9 @@ def operation_detail(root, item):
     if capability == 'research.delegate':
         return safe_diagnostic(root, inputs.get('task', ''), limit=240)
     if capability in {'read_file', 'research.read_artifact'}:
+        if 'json_pointer' in output:
+            pointer=safe_diagnostic(root,' › '.join(output['json_pointer'].split('/')[1:]) or '根节点',limit=160)
+            return ('已读取 JSON 结构：' if output.get('view')=='structure' else '已读取 JSON 字段：')+pointer+'。'
         total = output.get('total_chars')
         if total is not None:return f"已读取 {len(output.get('excerpt', ''))} 个字符，文件共 {total} 个字符。"
         start, size = inputs.get('start'), inputs.get('limit')
@@ -157,7 +162,7 @@ def tool_projection(root, research_id, item, *, fs=None):
         row['files'] = run_files(root, fs, run_id)
         if row['files'] and not row['detail'] and row['status'] != 'running':
             row['detail'] = f"已保留 {len(row['files'])} 个结果文件。"
-    if item.get('tool_name') in {'run_python','research.run_python'} and isinstance(output.get('output_tail'), str):
+    if item.get('tool_name') in {'run_python','research.run_python','research.run_file'} and isinstance(output.get('output_tail'), str):
         row['output_tail'] = output['output_tail'][-6000:]
     refs = output.get('artifact_refs', []) if isinstance(output, dict) else []
     row['result_ids'] = [r for r in refs if isinstance(r, str) and re.fullmatch(r'[RF]\d+', r)]

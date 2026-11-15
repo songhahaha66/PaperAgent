@@ -7,8 +7,7 @@ import pytest
 
 from ai_system.graph.context import GraphContext
 from ai_system.modules.registry import invoke
-from ai_system.research.control import observe
-from ai_system.research.loop import _set_action
+from ai_system.modules.experiments.execution import recover_outputs
 from ai_system.research.runtime import ResearchRuntime
 from ai_system.research.store import ResearchStore
 from ai_system.sandbox.remote_kernel import RemoteKernel
@@ -91,19 +90,16 @@ def test_observe_recovers_files_before_writing_without_new_computation(tmp_path,
         resumed=GraphContext.create(str(tmp_path),planner_llm=None);resumed.research=ctx.research
         session.offline=offline
         resumed.kernels._kernels['research']=RemoteKernel(tmp_path,session,SandboxSettings(provider='fake'),fs=resumed.fs)
-        with ctx.research._transaction() as db:
-            state=ctx.research._read(db)
-            state['publication']={'stage':'validate'}
-            action=_set_action(state,'writing.validate',{},'整理已有结果')
-            ctx.research._save(db,state,'test_pending_writing',{})
+        async def recover():
+            try:await recover_outputs(resumed)
+            finally:await resumed.kernels.disconnect()
         budget=deepcopy(ResearchRuntime(tmp_path).status())
         if offline:
             with pytest.raises(ConnectionError,match='file channel'):
-                await observe({},SimpleNamespace(context=resumed))
-            assert ctx.research.snapshot()['action']==action
+                await recover()
             assert not resumed.fs.exists(f'outputs/research/{rid}/outputs/table.csv')
         else:
-            assert await observe({},SimpleNamespace(context=resumed))=={'research_blocked':False}
+            await recover()
             path=f'outputs/research/{rid}/outputs/table.csv'
             assert resumed.fs.read_text(path)=='print(1)'
             assert resumed.fs.get_file_meta(path)['source_run']==rid

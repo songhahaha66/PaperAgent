@@ -78,13 +78,19 @@ def gates(ctx):
     return ctx.tool_gates
 
 
+def check_tool_access(ctx, name):
+    allowed=getattr(ctx,'allowed_capabilities',None)
+    if allowed is not None and name not in allowed:
+        raise ValueError('fork子任务不能执行 '+name+'；只处理分配范围，返回结果交由主Agent整合。')
+
+
 class ToolExecution:
     def __init__(self, ctx, turn, invocation):
         from ai_system.research.runtime import execution_links
         from ai_system.modules.registry import display_inputs
         self.ctx, self.turn, self.invocation = ctx, turn, invocation
-        tool_type = ('commandExecution' if invocation.name in {'research.run_python', 'run_python'} else
-                     'fileChange' if invocation.name in {'writing.edit', 'writing.use_asset', 'writing.save_source'} else
+        tool_type = ('commandExecution' if invocation.name in {'research.run_python', 'research.run_file', 'run_python'} else
+                     'fileChange' if invocation.name in {'writing.edit', 'workspace.edit', 'writing.use_asset', 'writing.save_source'} else
                      'collabToolCall' if invocation.name == 'research.delegate' else 'toolCall')
         self.item = dict(id=item_id(turn.thread_id, turn.turn_id + ':' + invocation.call_id), thread_id=turn.thread_id,
                          turn_id=turn.turn_id, type=tool_type, call_id=invocation.call_id,
@@ -154,12 +160,12 @@ def _result(value):
 
 async def _reconcile(ctx, invocation):
     """A submitted process is a receipt even if its model response was lost."""
-    if invocation.name not in {'research.run_python','run_python'}:return None
+    if invocation.name not in {'research.run_python','research.run_file','run_python'}:return None
     run = next(((rid, info) for rid, info in ctx.fs._manifest.get('runs', {}).items()
                 if info.get('tool_call_id') == invocation.call_id), None)
     if not run:return None
     rid, info = run
-    if invocation.name == 'research.run_python':
+    if invocation.name in {'research.run_python','research.run_file'}:
         from ai_system.research.runs import run_result
         value = {**run_result(ctx, rid), 'recovered': True, 'note': '复用已有运行回执；未重放代码。执行未知时先核实日志。'}
         result = _result(value)
@@ -199,6 +205,7 @@ async def dispatch(ctx, invocation, handler):
             turn.put(operation.snapshot(), 'item/started')
         token = CURRENT_TOOL.set(operation)
         try:
+            check_tool_access(ctx,invocation.name)
             async with limits.acquire(invocation.access):
                 with execution_scope(tool_call_id=invocation.call_id, parent_call_id=operation.item['id'],
                                      events=getattr(ctx,'events',None), research_id=getattr(getattr(ctx,'research',None),'research_id',None)):
@@ -242,7 +249,7 @@ async def invoke(ctx, registry, name, arguments, *, call_id=None):
 
 
 async def call_tool(ctx, call, handler, *, access='write'):
-    """Adapter for LangChain child/experiment tools; model formatting stays here."""
+    """Child/experiment tools share the same dispatcher and result formatting."""
     from langchain_core.messages import ToolMessage
     async def run():
         message = await handler()
@@ -256,6 +263,20 @@ async def call_tool(ctx, call, handler, *, access='write'):
     except (ValueError, KeyError, FileNotFoundError) as exc:
         from ai_system.research.review_cache import error_detail
         return ToolMessage(content=error_detail(exc), tool_call_id=call['id'], name=call['name'], status='error')
+
+
+async def recover_tool(ctx, call):
+    """Return submitted work only; a new user request never submits an old call."""
+    from langchain_core.messages import ToolMessage
+    from ai_system.research.store import digest
+    turn=CURRENT_TURN.get()
+    invocation=ToolInvocation(call['name'],call['id'],call.get('args') or {})
+    saved=turn.store.receipt(turn.thread_id,invocation.call_id,digest([invocation.name,invocation.arguments])) if turn else None
+    result=ToolResult(**saved) if saved is not None else await _reconcile(ctx,invocation)
+    if result is None:return None
+    content=result.value if isinstance(result.value,(str,list)) else json.dumps(result.value,ensure_ascii=False)
+    return ToolMessage(content=content,tool_call_id=call['id'],name=call['name'],
+                       status='success' if result.status=='completed' else 'error')
 
 
 async def reject_call(ctx, call_id, name, message):

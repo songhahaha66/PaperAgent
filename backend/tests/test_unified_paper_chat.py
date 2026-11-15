@@ -1,3 +1,4 @@
+from ai_system.agent.store import AgentStore
 """Paper references use the same Agent and retain reviewed, versioned edits."""
 import asyncio
 import json
@@ -5,7 +6,7 @@ import json
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
-from ai_system.graph.agent import PaperGraphAgent
+from ai_system.agent.agent import PaperAgent
 from ai_system.graph.context import GraphContext
 from ai_system.modules.registry import invoke
 from services.chat_services import paper_project as project
@@ -26,14 +27,14 @@ def test_main_agent_proposes_reference_edits_without_overwriting_source(paper):
     store,_=paper;store.set_outcome('completed')
     context=validate_context(store.root,store.research_id,bound_context(store))
     before=(store.root/'paper.md').read_text()
-    workspace_path(store.root,'.system/graph.sqlite').touch()
+    AgentStore(store.root)
     def respond(messages):
         if not any(isinstance(m,ToolMessage) and m.name=='writing_propose_edits' for m in messages):
             assert any('本轮论文引用' in str(m.content) for m in messages)
             return tool('writing_propose_edits',{'edits':[{'reference':0,'replacement':'# 修改后的正文\n保留适用范围与局限。'}]},'proposal')
         return AIMessage(content='已提出修改集，请查看并接受。')
     model=ResearchToolsModel(respond=respond)
-    agent=PaperGraphAgent(model,workspace_dir=str(store.root))
+    agent=PaperAgent(model,workspace_dir=str(store.root))
     asyncio.run(agent.send_message('修改引用的措辞',message_id='user:quoted',paper_context=context))
     assert (store.root/'paper.md').read_text()==before
     changes=project.read_records(store,'paper_changes')

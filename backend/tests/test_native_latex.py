@@ -43,11 +43,13 @@ def test_native_draft_is_separate_and_advisory_findings_do_not_hide_current_expo
     from services.chat_services import paper_project as project
     from ai_system.research.models import IssueReport
     import ai_system.export.latex as latex
-    async def compile_fixture(cmd, cwd, **kwargs):
-        assert cmd[0] == 'xelatex' and '-no-shell-escape' in cmd
+    async def compile_fixture(tex_name, cwd, **kwargs):
+        assert tex_name == 'paper.tex'
         (cwd / '.build/latex/paper.pdf').write_bytes(b'%PDF-verified-fixture')
-        return 0, 'Output written on paper.pdf (1 page).', ''
-    monkeypatch.setattr(latex, 'run_command', compile_fixture)
+        (cwd / '.build/latex/paper.log').write_text('Output written on paper.pdf (1 page).')
+        (cwd / '.build/latex/compile.log').write_text('xelatex pass 1, exit 0\nxelatex pass 2, exit 0')
+        return 0, json.dumps({'failed_stage':None,'timed_out':False,'log_path':'.build/latex/paper.log'}), ''
+    monkeypatch.setattr(latex, 'run_latex', compile_fixture)
     store=accepted_store(tmp_path)
     with store._transaction() as db:
         state=store._read(db);state['spec']['output_mode']='latex';store._save(db,state,'fixture_native_output',{})
@@ -102,16 +104,81 @@ def test_compile_failure_never_publishes_partial_or_stale_pdf(tmp_path, monkeypa
     (tmp_path / 'paper.tex').write_text(r'\documentclass{article}\begin{document}\undefinedcommand\end{document}')
     (tmp_path / 'paper.pdf').write_bytes(b'%PDF-old')
     calls=[]
-    async def fail(cmd, cwd, **kwargs):
-        calls.append(cmd)
-        assert '-no-shell-escape' in cmd and '-halt-on-error' in cmd
+    async def fail(tex_name, cwd, **kwargs):
+        calls.append(tex_name)
         (cwd / '.build/latex/paper.pdf').write_bytes(b'%PDF-partial')
-        return 1, '! Undefined control sequence.', ''
-    monkeypatch.setattr(latex, 'run_command', fail)
+        (cwd / '.build/latex/paper.log').write_text('! Undefined control sequence.')
+        (cwd / '.build/latex/compile.log').write_text('xelatex pass 1, exit 1\n! Undefined control sequence.')
+        return 1, json.dumps({'failed_stage':'xelatex','timed_out':False,'log_path':'.build/latex/paper.log'}), ''
+    monkeypatch.setattr(latex, 'run_latex', fail)
     result = asyncio.run(compile_pdf(tmp_path))
     assert len(calls)==1 and result.exit_code==1
     assert result.pdf_path is None and result.error
     assert (tmp_path / 'paper.pdf').read_bytes() == b'%PDF-old'
+
+
+def test_export_reuses_archived_pdf_and_invalidates_source_and_asset_changes(tmp_path, monkeypatch):
+    from ai_system.export.latex import LatexResult
+    from ai_system.modules.writing.export import _latex
+    from services.chat_services import paper_project as project
+    from helpers.research import make_store
+    store=make_store(tmp_path)
+    (tmp_path/'chart.png').write_bytes(b'chart-v1')
+    (tmp_path/'paper.tex').write_text(r'\documentclass{article}\begin{document}\includegraphics{chart.png}Text\end{document}')
+    ctx=GraphContext.create(str(tmp_path),planner_llm=None,output_mode='latex');ctx.research=store
+    builds=[]
+    async def compile_fixture(staging, main, **kwargs):
+        builds.append(project.snapshot(tmp_path)['version'])
+        await asyncio.sleep(0)
+        if len(builds)==4:return LatexResult(main,error='controlled compile error')
+        (staging/'paper.pdf').write_bytes(f'PDF-{len(builds)}'.encode())
+        return LatexResult(main,pdf_path='paper.pdf',pages=1)
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',compile_fixture)
+    async def run():
+        first,concurrent=await asyncio.gather(project.compile_project(store),_latex(ctx))
+        assert first['compiled'] is True and concurrent['compiled'] is False and len(builds)==1
+        (tmp_path/'paper.pdf').write_bytes(b'changed public copy')
+        same=await _latex(ctx)
+        assert same['compiled'] is False and len(builds)==1
+        assert (tmp_path/'paper.pdf').read_bytes()==b'PDF-1'
+        (tmp_path/'chart.png').write_bytes(b'chart-v2')
+        assert (await _latex(ctx))['compiled'] is True and len(builds)==2
+        path=tmp_path/'paper.tex';path.write_text(path.read_text().replace('Text','Revised'))
+        assert (await _latex(ctx))['compiled'] is True and len(builds)==3
+        path.write_text(path.read_text().replace('Revised','Broken'))
+        assert (await _latex(ctx)).get('issues') and len(builds)==4
+        assert (tmp_path/'paper.pdf').read_bytes()==b'PDF-3'
+        assert project.meta(tmp_path)['compile']['state']=='failed'
+    asyncio.run(run())
+
+
+def test_batch_worker_runs_bibliography_and_stops_on_failed_step(tmp_path, monkeypatch):
+    from ai_system.export import latex_worker
+    monkeypatch.chdir(tmp_path)
+    calls=[]
+    fail_bibliography=False
+    def command(argv, **kwargs):
+        calls.append(argv)
+        build=tmp_path/'.build/latex'
+        if argv[0]=='bibtex':
+            assert argv==['bibtex','paper'] and kwargs['cwd']==Path('.build/latex')
+            assert kwargs['env']['BIBINPUTS'].startswith(str(tmp_path))
+            (build/'paper.blg').write_text('bad bibliography' if fail_bibliography else 'bibliography completed')
+            return SimpleNamespace(returncode=2 if fail_bibliography else 0,stdout=b'',stderr=b'')
+        assert '-no-shell-escape' in argv and '-halt-on-error' in argv
+        count=sum(c[0]=='xelatex' for c in calls)
+        (build/'paper.aux').write_text(r'\bibdata{refs}')
+        (build/'paper.log').write_text('Label(s) may have changed' if count==2 else 'Output written on paper.pdf (1 page).')
+        return SimpleNamespace(returncode=0,stdout=b'',stderr=b'')
+    monkeypatch.setattr(latex_worker.subprocess,'run',command)
+    result=latex_worker.compile_latex('paper.tex',180)
+    assert [c[0] for c in calls]==['xelatex','bibtex','xelatex','xelatex']
+    assert result['exit_code']==0 and len(result['steps'])==4
+    calls.clear();fail_bibliography=True
+    result=latex_worker.compile_latex('paper.tex',180)
+    assert [c[0] for c in calls]==['xelatex','bibtex']
+    assert result['exit_code']==2 and result['failed_stage']=='bibtex'
+    assert 'bibtex, exit 2' in (tmp_path/'.build/latex/compile.log').read_text()
 
 
 def test_supplied_bibliography_is_preserved_without_invented_metadata(tmp_path):

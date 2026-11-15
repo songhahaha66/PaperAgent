@@ -60,7 +60,7 @@ def test_chat_releases_project_connection_while_agent_runs(tmp_path, monkeypatch
 
     monkeypatch.setattr(chat, 'get_db', lambda: iter([sessions()]))
     monkeypatch.setattr(chat, 'ChatService', Service)
-    monkeypatch.setattr(chat, 'PaperGraphAgent', Agent)
+    monkeypatch.setattr(chat, 'PaperAgent', Agent)
     monkeypatch.setattr(chat, 'LLMHandler', Handler)
     monkeypatch.setattr(chat, 'get_workspace_path', lambda _: root)
     monkeypatch.setattr(chat, 'set_work_status', lambda *args: None)

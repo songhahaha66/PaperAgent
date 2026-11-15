@@ -9,7 +9,7 @@ from ai_system.research.store import ResearchStore
 from ai_system.research.models import WorkerResult, IssueReport, ResearchRevision
 from ai_system.research import operations
 from research_tools_helpers import add_experiment
-from ai_system.research.loop import prepare_action, resume
+from ai_system.research.session import run_research, resume
 from ai_system.research.control import graph_view
 from ai_system.research.domain import experiment_report
 from services.chat_services.research_session import research_snapshot

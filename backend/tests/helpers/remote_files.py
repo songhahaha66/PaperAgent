@@ -40,6 +40,10 @@ class RemoteFiles:
     async def inventory(self, paths=None, *, kind='python'):
         with self.worker():return transfer_worker.inventory(kind,paths,self.settings.max_file_bytes)
 
+    async def prepare_inputs(self, paths):
+        with self.worker():
+            return transfer_worker.operation({'op':'prepare','paths':paths,'limit':self.settings.max_file_bytes})
+
     async def upload(self,path,source,sha256):
         with self.worker():target=transfer_worker.path(path)
         raw=Path(source).read_bytes()

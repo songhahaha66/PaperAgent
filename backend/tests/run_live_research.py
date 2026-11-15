@@ -14,7 +14,7 @@ from services.data_services.crud import create_work, update_work_status
 from config.paths import get_workspace_path
 from ai_system.config.environment import DatabaseConfigManager
 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
-from ai_system.graph.agent import PaperGraphAgent
+from ai_system.agent.agent import PaperAgent
 from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
 from services.chat_services.chat_history_manager import ChatHistoryManager
 from services.chat_services.conversation_timeline import TurnWriter
@@ -56,7 +56,7 @@ async def main(owner_work=None, resume_work=None):
             if block['type'] not in {'file_changed','research_state','research_snapshot'}:
                 writer.block(block)
     stream = StreamOutputManager(Callback())
-    agent = PaperGraphAgent(llms['brain'], stream, str(root), work_id,
+    agent = PaperAgent(llms['brain'], stream, str(root), work_id,
         codeagent_llm=llms['code'], output_mode='latex')
     token = CURRENT_TURN.set(writer.turn)
     try:

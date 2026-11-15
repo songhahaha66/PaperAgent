@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_system.export.docx import export_docx
-from ai_system.graph import PaperGraphAgent
+from ai_system.graph import PaperAgent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from helpers.graph import TASK, FakeModel, _make_workspace
 
@@ -61,7 +61,7 @@ def test_graph_agent_latex_mode_builds_pdf(tmp_path, monkeypatch):
         async def send_json_block(self, block_type, content):
             events.append((block_type, content))
 
-    agent = PaperGraphAgent(
+    agent = PaperAgent(
         FakeModel(), stream_manager=Recorder(), workspace_dir=str(ws), output_mode="latex"
     )
     output = asyncio.run(agent.run(TASK))
@@ -135,7 +135,7 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     (ws / 'template/contract.md').write_text(MD_CONTRACT, encoding="utf-8")
     # This checks template/export behavior; adversarial prose and its repair are
     # covered by test_graph_end_to_end_offline, including the unregistered number.
-    agent = PaperGraphAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), output_mode="word")
+    agent = PaperAgent(FakeModel(loose_number_once=False), workspace_dir=str(ws), output_mode="word")
     output = asyncio.run(agent.run(TASK))
     assert "paper.docx" in output
 
@@ -149,7 +149,6 @@ def test_graph_agent_word_mode_follows_template(tmp_path):
     snapshot = research_snapshot(ws, "work", "completed")
     from ai_system.research.store import ResearchStore
     saved=ResearchStore(ws,snapshot.research_id).snapshot()
-    assert [item['title'] for item in saved['publication']['outline']]==[
-        '摘要','1 研究背景','2 模型假设','3 模型建立与求解','4 结论与建议','参考文献']
+    assert saved['publication'] is None and saved['outcome']=='completed'
     assert snapshot.delivery_stages["export"]["status"] == "completed"
     assert "paper.docx" in snapshot.artifacts

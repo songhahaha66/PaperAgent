@@ -1,6 +1,7 @@
 """Execution tools used by the single research controller."""
 from ai_system.modules.registry import CapabilityProduct, Inputs
 from pydantic import Field
+import json
 
 
 async def inspect_materials(ctx, inputs):
@@ -18,6 +19,25 @@ class CodeInput(Inputs):
     code: str = Field(min_length=1)
     title: str = ''
     question_id: str | None = Field(default=None, description='可选，使用已建立问题的真实编号；公共资料分析可省略。不得借用其他问题编号。')
+
+
+class FileRunInput(Inputs):
+    path: str = Field(pattern=r'^code/.+\.py$',description='工作区 code/ 下的 Python 入口文件')
+    args: list[str] = Field(default_factory=list, description='传给入口的命令行参数')
+    title: str = ''
+    question_id: str | None = None
+
+
+async def run_file(ctx, inputs):
+    from ai_system.modules.workspace import source_path
+    path = source_path(ctx.workspace, inputs['path'])
+    if path.suffix != '.py' or not path.is_file():
+        raise ValueError('请先创建 code/ 下的 Python 入口文件')
+    code = ('import runpy, sys\n'
+            f'sys.argv = {json.dumps([inputs["path"], *inputs["args"]], ensure_ascii=False)}\n'
+            "sys.path.insert(0, 'code')\n"
+            f'runpy.run_path({inputs["path"]!r}, run_name="__main__")\n')
+    return await run_code(ctx, {**inputs, 'code': code, 'entrypoint': inputs['path']})
 
 
 async def run_code(ctx, inputs):
@@ -43,6 +63,8 @@ async def run_code(ctx, inputs):
         info = ctx.fs.get_run_info(run_id)
         info.update(research_id=store.research_id, scope='research', question_id=qid,
                     tool_call_id=key, title=inputs['title'])
+        if inputs.get('entrypoint'):
+            info.update(entrypoint=inputs['entrypoint'],argv=inputs['args'])
         ctx.fs._save_manifest()
     runs = []
     try:
@@ -66,6 +88,8 @@ async def run_code(ctx, inputs):
 
 
 def register(registry):
+    registry.register('experiments','research.run_file','research_state',run_file,FileRunInput,
+        model_callable=True,purpose='运行已保存的 code/ Python 入口，支持 args；自动冻结代码与参数版本，返回真实输出、资源与执行阶段耗时。修改源码使用 workspace_edit。')
     registry.register('experiments','research.run_python','research_state',run_code,CodeInput,
         model_callable=True,purpose='直接在沙箱独立Python进程计算，返回实际输出与结果文件；每次执行不共享内存变量，复用code/模块和落盘结果。无需另建计划、子Agent或申请尝试次数。')
     registry.register('experiments','experiments.inspect','research_state',inspect_materials,
