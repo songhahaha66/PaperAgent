@@ -9,7 +9,8 @@ from ai_system.config.generation import model_capabilities
 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
 
 
-def test_official_terra_tool_round_trip_uses_responses_without_temperature(monkeypatch):
+@pytest.mark.parametrize('model_id', ['gpt-6.1-sol', 'gpt-6.1-terra'])
+def test_official_gpt6_tool_round_trip_uses_responses_without_temperature(monkeypatch, model_id):
     import json
     from langchain_core.messages import HumanMessage, ToolMessage
     from ai_system.core_handlers import llm_providers
@@ -31,14 +32,14 @@ def test_official_terra_tool_round_trip_uses_responses_without_temperature(monke
             output = [{'type': 'message', 'id': 'msg_check', 'role': 'assistant', 'status': 'completed',
                        'content': [{'type': 'output_text', 'text': 'OK', 'annotations': []}]}]
         return httpx.Response(200, json={'id': f'resp_{len(requests)}', 'object': 'response',
-            'created_at': 1, 'status': 'completed', 'model': 'gpt-6.1-terra', 'output': output,
+            'created_at': 1, 'status': 'completed', 'model': model_id, 'output': output,
             'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}})
 
     client_class = httpx.Client
     with client_class(transport=httpx.MockTransport(respond)) as client:
         monkeypatch.setattr(llm_providers, 'httpx', SimpleNamespace(
             Client=lambda **kwargs: client, AsyncClient=httpx.AsyncClient))
-        model = create_llm_from_model_config(SimpleNamespace(model_id='gpt-6.1-terra',
+        model = create_llm_from_model_config(SimpleNamespace(model_id=model_id,
             base_url='https://api.openai.com/v1', api_key='offline',
             generation_settings={'reasoning_effort': 'medium'}), streaming=False)
         bound = model.bind_tools([{'name': 'check_connection', 'description': 'Check the connection',
