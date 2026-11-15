@@ -87,6 +87,14 @@ class ModelGenerationLimit(RuntimeError):
 class ModelContextLimit(ModelGenerationLimit):pass
 
 
+class FixedContextLimit(ModelContextLimit):
+    """Required instructions or an indivisible tool turn cannot fit."""
+
+
+class ContextCompactionFailed(ModelContextLimit):
+    """A continuation could not meet the capacity target; history is intact."""
+
+
 class ModelContextOverflow(ModelContextLimit):
     """Request rejected before response content; safe to rebuild context once."""
 

@@ -46,6 +46,31 @@ def test_unshrinkable_latest_call_is_not_rewritten_or_sent_over_budget(tmp_path)
     assert history[1].tool_calls[0]['args']['code']=='数据'*4000
 
 
+def test_forced_compaction_reduces_request_and_survives_restart(tmp_path):
+    from ai_system.config.generation import ModelContextOverflow
+    from ai_system.core_handlers.model_runtime import reservation
+    from ai_system.agent.metering import request_estimate
+    model=ResearchToolsModel(respond=lambda _:AIMessage(content='{"notes":["保留效率0.95和已完成计算，不重跑。"]}'),
+                             profile={'max_input_tokens':10000})
+    ctx=context(tmp_path,model);history=[HumanMessage('效率0.95；已完成的计算不要重跑')]
+    for i in range(5):
+        history += [tool('run_python',{'code':'compute '*500},str(i)),ToolMessage('result=6',tool_call_id=str(i))]
+    original=[m.model_dump() for m in history];sent=[]
+    async def handle(request):
+        sent.append(request.messages)
+        reservation(model,(request.messages,),{})
+        if len(sent)==1:raise ModelContextOverflow('provider rejected context before generation')
+        return AIMessage(content='continue')
+    async def run():
+        await ContextManager(ctx,model,'forced',pinned={}).call(Request(history),handle)
+        await ContextManager(ctx,model,'forced',pinned={}).call(Request(history),handle)
+    asyncio.run(run())
+    assert len(sent)==3 and model.calls==1
+    assert request_estimate(sent[1])<request_estimate(sent[0])*.8
+    assert [m.model_dump() for m in history]==original
+    assert [m.content for m in sent[1]]==[m.content for m in sent[2]]
+
+
 def test_summary_has_a_separate_nonthinking_budget_without_changing_research():
     from ai_system.core_handlers.llm_providers import create_llm_from_model_config
     model=create_llm_from_model_config(SimpleNamespace(model_id='deepseek-flash',base_url='https://api.deepseek.com',
