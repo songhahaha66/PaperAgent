@@ -109,7 +109,10 @@ def test_real_agent_appends_external_edit_event_and_restores_it(tmp_path,monkeyp
 
 
 def test_request_counts_content_and_keeps_full_receipt_without_ciphertext_budget(tmp_path):
-    model=ResearchToolsModel(respond=lambda _:pytest.fail('No compaction needed'),profile={'max_input_tokens':5000})
+    from ai_system.core_handlers.model_runtime import reservation
+    from ai_system.config.generation import ModelContextOverflow
+    model=ResearchToolsModel(respond=lambda _:pytest.fail('No compaction needed'),
+                             profile={'max_input_tokens':5000,'max_context_tokens':21000})
     ctx=context(tmp_path,model)
     call=tool('research_run_file',{'path':'code/solve.py'},'compute')
     call.content=[{'type':'reasoning','encrypted_content':'opaque-transport-'*20000}]
@@ -120,9 +123,10 @@ def test_request_counts_content_and_keeps_full_receipt_without_ciphertext_budget
            'phase_timings':[{'phase':'transfer','detail':'telemetry'*10000}],'transfer':{'bytes':123}}
     history=[HumanMessage('Preserve the assertion and result.'),call,
              ToolMessage(json.dumps(value),tool_call_id='compute',name='research_run_file')]
-    sent=[];stats=[]
+    sent=[];stats=[];reserved=[]
     async def handle(request):
         sent.append(request.messages);stats.append(execution_links()['context_usage'])
+        reserved.append(reservation(model,(request.messages,),{}))
     asyncio.run(ContextManager(ctx,model,'content-only',pinned={}).call(Request(history),handle))
     observation=json.loads(sent[0][-1].content)
     assert observation['error']==value['error'] and observation['observation']==value['observation']
@@ -131,3 +135,6 @@ def test_request_counts_content_and_keeps_full_receipt_without_ciphertext_budget
     assert sent[0][-2].content==call.content and sent[0][-2].response_metadata==call.response_metadata
     assert stats[0]['total_estimated_tokens']<1500 and model.calls==0
     assert sum(stats[0]['message_groups_estimated_tokens'].values())==stats[0]['messages_estimated_tokens']
+    assert 40<=reserved[0]['input_tokens']<1500
+    with pytest.raises(ModelContextOverflow):
+        reservation(model,([HumanMessage('真实输入'*6000)],),{})

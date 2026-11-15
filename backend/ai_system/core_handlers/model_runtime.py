@@ -89,17 +89,15 @@ def reply_usage(reply):
 
 
 def reservation(model,args,kwargs):
-    from ..agent.prompt import token_estimate
+    from ..agent.prompt import message_estimate,token_estimate
     from ..agent.images import ImageProjection
-    from langchain_core.messages import messages_to_dict
     messages=args[0] if args else kwargs.get('messages',[])
-    try:body=messages_to_dict(messages)
-    except (TypeError,AttributeError):body=str(messages)
-    # This boundary receives hydrated native blocks. Reuse the same route-aware
-    # meter as compaction; base64 bytes are transport, never ordinary text tokens.
+    # Share compaction's content meter: native images use the route policy,
+    # opaque reasoning uses returned usage, and response metadata is not input.
     media=ImageProjection(None,model,{})
-    estimated=token_estimate([body,kwargs.get('tools',[]),kwargs.get('functions',[])],
-                             image_counter=media.native_tokens)
+    estimated=(message_estimate(messages,image_counter=media.native_tokens)
+               +token_estimate([kwargs.get('tools',[]),kwargs.get('functions',[])],
+                               image_counter=media.native_tokens))
     profile=getattr(model,'profile',None) or {}
     ceiling=profile.get('max_context_tokens')
     if ceiling and estimated+int(getattr(model,'max_tokens',None) or 16000)>ceiling:
