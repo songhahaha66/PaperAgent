@@ -9,6 +9,49 @@ from ai_system.config.generation import model_capabilities
 from ai_system.core_handlers.llm_providers import create_llm_from_model_config
 
 
+def test_official_terra_tool_round_trip_uses_responses_without_temperature(monkeypatch):
+    import json
+    from langchain_core.messages import HumanMessage, ToolMessage
+    from ai_system.core_handlers import llm_providers
+
+    requests = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        assert request.url.path == '/v1/responses'
+        assert 'temperature' not in payload
+        if len(requests) == 1:
+            assert payload['tools'][0]['name'] == 'check_connection'
+            output = [{'type': 'function_call', 'id': 'fc_check', 'call_id': 'call_check',
+                       'name': 'check_connection', 'arguments': '{}', 'status': 'completed'}]
+        else:
+            assert any(item.get('type') == 'function_call_output' and item['output'] == 'OK'
+                       for item in payload['input'])
+            output = [{'type': 'message', 'id': 'msg_check', 'role': 'assistant', 'status': 'completed',
+                       'content': [{'type': 'output_text', 'text': 'OK', 'annotations': []}]}]
+        return httpx.Response(200, json={'id': f'resp_{len(requests)}', 'object': 'response',
+            'created_at': 1, 'status': 'completed', 'model': 'gpt-6.1-terra', 'output': output,
+            'usage': {'input_tokens': 10, 'output_tokens': 5, 'total_tokens': 15}})
+
+    client_class = httpx.Client
+    with client_class(transport=httpx.MockTransport(respond)) as client:
+        monkeypatch.setattr(llm_providers, 'httpx', SimpleNamespace(
+            Client=lambda **kwargs: client, AsyncClient=httpx.AsyncClient))
+        model = create_llm_from_model_config(SimpleNamespace(model_id='gpt-6.1-terra',
+            base_url='https://api.openai.com/v1', api_key='offline',
+            generation_settings={'reasoning_effort': 'medium'}), streaming=False)
+        bound = model.bind_tools([{'name': 'check_connection', 'description': 'Check the connection',
+                                  'parameters': {'type': 'object', 'properties': {}}}])
+        prompt = HumanMessage(content='Check the connection.')
+        first = bound.invoke([prompt])
+        assert first.tool_calls[0]['name'] == 'check_connection'
+        final = bound.invoke([prompt, first, ToolMessage(content='OK', tool_call_id='call_check')])
+        assert final.text == 'OK'
+        assert final.usage_metadata['total_tokens'] == 15
+    assert len(requests) == 2
+
+
 def test_official_deepseek_uses_known_window_and_explicit_selection_wins():
     config = SimpleNamespace(model_id='deepseek-flash', base_url='https://api.deepseek.com/v1',
                              api_key='offline', thinking_enabled=True, generation_settings={})
