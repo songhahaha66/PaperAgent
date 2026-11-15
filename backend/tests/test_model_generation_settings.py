@@ -41,7 +41,7 @@ def test_unknown_gateway_capacity_is_not_inferred_from_the_endpoint_name():
 
 def test_vision_settings_reach_the_actual_model_projection_without_network_calls():
     from ai_system.config.generation import GenerationSettings
-    from ai_system.graph.images import vision_policy
+    from ai_system.agent.images import vision_policy
     config = SimpleNamespace(model_id='deepseek-flash', base_url='https://api.deepseek.com/v1',
                              api_key='offline', generation_settings={})
     native = create_llm_from_model_config(config)
@@ -68,7 +68,7 @@ def test_env_image_inputs_default_on_and_can_be_disabled(monkeypatch):
     settings = load_env_api_settings()
     assert settings.image_inputs is True
     model = create_llm_from_model_config(EnvModelConfig(settings))
-    from ai_system.graph.images import vision_policy
+    from ai_system.agent.images import vision_policy
     assert vision_policy(model).enabled and vision_policy(model).strategy == 'inline'
     monkeypatch.setenv('PAPERAGENT_API_IMAGE_INPUTS', 'off')
     assert load_env_api_settings().image_inputs is False

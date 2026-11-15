@@ -8,7 +8,6 @@
 """
 
 import hashlib
-from langgraph.runtime import Runtime
 
 from ai_system.export import export_docx
 from ai_system.graph.context import TEMPLATE_DOCX, GraphContext
@@ -18,8 +17,9 @@ from ai_system.graph.state import PaperState
 async def _latex(ctx: GraphContext) -> dict:
     from services.chat_services.paper_project import compile_project, source_state
     from ai_system.agent.runtime import update_tool, tool_metadata
-    tool_metadata(ctx, preview_stage='compiling')
-    data=await compile_project(ctx.research)
+    data=await compile_project(ctx.research,on_compile=lambda:tool_metadata(ctx,preview_stage='compiling',compiled=True))
+    compiled=data['compiled']
+    tool_metadata(ctx,compiled=compiled)
     compilation=data['compile']
     update_tool(ctx, display_file='paper.pdf' if compilation['success'] else 'paper.tex')
     tool_metadata(ctx,warnings=compilation['warnings'],warning_count=len(compilation['warnings']))
@@ -34,7 +34,8 @@ async def _latex(ctx: GraphContext) -> dict:
         if compilation['warnings']:
             note += "\n\n编译警告：" + "；".join(compilation['warnings'])
         await ctx.events.emit("paper_export", note)
-        return {"exports":['paper.tex','paper.pdf'],"source_version":compilation["source_version"],"log": ["export: paper.pdf"]}
+        return {"exports":['paper.tex','paper.pdf'],"source_version":compilation["source_version"],
+                'pdf_sha256':data['pdf_sha256'],'compiled':compiled,"log": ["export: paper.pdf"]}
 
     error=compilation['message']
     await ctx.set_stage("export", "blocked", error)
@@ -118,7 +119,7 @@ def prepare_source(state: PaperState, ctx: GraphContext) -> dict:
     return {'paper_path':path,'artifact_conflict':conflict,'source_version':version}
 
 
-async def export(state: PaperState, runtime: Runtime[GraphContext]) -> dict:
+async def export(state: PaperState, runtime) -> dict:
     ctx=runtime.context
     await ctx.set_stage('export','in_progress')
     try:

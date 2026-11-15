@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 from pydantic import Field
 from langchain_core.messages import HumanMessage
-from ai_system.graph.commentary import public_progress
+from ai_system.agent.commentary import public_progress
 from .registry import Inputs,CapabilityProduct
 
 
@@ -17,20 +17,16 @@ class DelegateInput(Inputs):
     context_mode: Literal['isolated','fork'] = 'isolated'
     files: list[str] = Field(default_factory=list,description='子任务必需的原始资料或已保存结果文件路径。')
     purpose: Literal['research','document_review'] = 'research'
-    source_version: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
-    pdf_sha256: str | None = Field(default=None,pattern=r'^[a-f0-9]{64}$')
 
 
 async def delegate(ctx, inputs):
     if inputs.get('purpose')=='document_review':return await review_document(ctx,inputs)
-    from langchain.agents import create_agent
-    from langchain.agents.middleware import wrap_tool_call
+    from ai_system.agent.loop import AgentLoop,run_session
     from langchain_core.messages import ToolMessage
     from langchain_core.tools import StructuredTool
     from ai_system.graph.context import GraphContext
-    from ai_system.graph.compaction import ContextMiddleware
+    from ai_system.agent.prompt import ContextManager
     from ai_system.modules.experiments.execution import build_tools,export_solution_code
-    from ai_system.research.session import session_saver,run_session
     from ai_system.research.runtime import execution_links,execution_scope
     from services.file_services.workspace_layout import workspace_path
     from ai_system.research.files import read_artifact
@@ -45,7 +41,7 @@ async def delegate(ctx, inputs):
     if inputs['task_id'] and record is None:raise ValueError('子任务不存在')
     sources={}
     for name in inputs['files']:
-        if name.split('/')[0] not in {'data','attachment','outputs','code'} and name not in {'paper.md','paper.tex','paper-sources.bib'}:
+        if name.split('/')[0] not in {'data','attachment','outputs','code','config'} and name not in {'paper.md','paper.tex','paper-sources.bib'}:
             raise ValueError('子任务只能接收公开资料、结果、代码或正文，不能复制内部状态')
         path=ctx.fs.canonical_artifact(name)
         if not path.is_file() or path.stat().st_size>20_000_000:raise ValueError('子任务资料不存在或超过20MB：'+name)
@@ -86,13 +82,6 @@ async def delegate(ctx, inputs):
         local.fs.get_run_info(run_id)['tool_call_id']=CURRENT_EXECUTION.get().get('tool_call_id')
         local.fs._save_manifest()
     tools=build_tools(local,'task-'+tid,runs,kernel_key='task-'+tid,on_run=remember_run)
-    @wrap_tool_call
-    async def receipts(request,handler):
-        from ai_system.agent.runtime import call_tool
-        call={**request.tool_call,'id':tid+':'+request.tool_call['id']}
-        message=await call_tool(local,call,lambda:handler(request),
-                                access='read' if call['name'] in {'read_file','search_literature'} else 'write')
-        return message.model_copy(update={'tool_call_id':request.tool_call['id']})
     async def read(path:str,start:int=0,limit:int=12000):
         value=await read_artifact(local,{'path':path,'task_id':None,'start':start,'limit':min(max(limit,1),24000)})
         return value.value
@@ -106,11 +95,10 @@ async def delegate(ctx, inputs):
         if record.get('model_task')!=inputs['task'] or 'answer' not in record:
             from ai_system.graph.tracing import labelled
             with execution_scope(step='独立子任务',subject=tid),labelled('task:'+tid):
-                async with session_saver(ctx) as saver:
-                    agent=create_agent(model=ctx.coder_llm,tools=tools,system_prompt=prompt,checkpointer=saver,
-                                       middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-task-'+tid,
-                                           pinned={'initial_task':record['initial_task'],'follow_up':inputs['task'],'files':sources}),receipts])
-                    result=await run_session(agent,store.research_id+'-task-'+tid,messages,ctx=local)
+                agent=AgentLoop(ctx.coder_llm,tools,prompt,ctx=local,
+                    context=ContextManager(local,ctx.coder_llm,store.research_id+'-task-'+tid,
+                        pinned={'initial_task':record['initial_task'],'follow_up':inputs['task'],'files':sources}))
+                result=await run_session(agent,store.research_id+'-task-'+tid,messages,ctx=local)
             record.update(answer='\n\n'.join(public_progress(result['messages'][-1].content)),model_task=inputs['task'],status='delivering')
             save()
         export_solution_code(local,'task',runs)
@@ -120,7 +108,8 @@ async def delegate(ctx, inputs):
             if hashlib.sha256(ctx.fs.canonical_artifact(name).read_bytes()).hexdigest()!=version:
                 raise ValueError('子任务执行期间输入发生变化，结果保留在子任务目录，未合并')
         published=capture_run_files(local.fs,ctx.fs)
-        code='code/task_solution.py'
+        from .experiments.execution import solution_code_path
+        code=solution_code_path('task')
         if local.fs.exists(code):
             target='outputs/tasks/'+tid+'/solution.py'
             ctx.fs.write_text(target,local.fs.read_text(code))
@@ -150,88 +139,67 @@ async def delegate(ctx, inputs):
 async def review_document(ctx, inputs):
     """An optional read-only task in the existing session/checkpoint/budget system."""
     import copy
-    from langchain.agents import create_agent
+    from ai_system.agent.loop import AgentLoop,run_session
     from langchain_core.tools import StructuredTool
     from langchain_core.messages import ToolMessage
-    from langchain.agents.middleware import wrap_tool_call
-    from ai_system.graph.compaction import ContextMiddleware
-    from ai_system.research.session import session_saver,run_session
+    from ai_system.agent.prompt import ContextManager
     from ai_system.research.runtime import execution_links,execution_scope
     from ai_system.research.files import resolve,text_file
-    from ai_system.sandbox.content_store import ContentStore
     from services.chat_services import paper_project as project
-    from services.file_services.workspace_layout import workspace_path
     from .writing.document import render_pages,tool_content
-    version,pdf_hash=inputs['source_version'],inputs['pdf_sha256']
-    if not version or not pdf_hash:raise ValueError('先writing_preview取得实际source_version和pdf_sha256，再委派只读复核')
-    archive=workspace_path(ctx.workspace,project.VERSIONS)/version
-    build=archive/'builds'/f'{pdf_hash}.json'
-    if not build.is_file():raise ValueError('指定版本没有已完成的PDF构建')
     tid=inputs['task_id'] or hashlib.sha256((execution_links().get('action_id') or json.dumps(inputs,sort_keys=True)).encode()).hexdigest()[:20]
     if len(tid)!=20 or any(c not in '0123456789abcdef' for c in tid):raise ValueError('task_id无效')
     store=ctx.research;key='delegation:'+tid
     with store._connect() as db:row=db.execute('SELECT response FROM commands WHERE research_id=? AND id=?',(store.research_id,key)).fetchone()
     previous=json.loads(row[0]) if row else None
     if inputs['task_id'] and previous is None:raise ValueError('复核子任务不存在')
-    if previous and (previous.get('purpose'),previous.get('source_version'),previous.get('pdf_sha256'))!=('document_review',version,pdf_hash):
-        raise ValueError('子任务不能换版本，请创建新复核任务')
-    content=ContentStore(ctx.workspace,20_000_000)
-    sources=dict(previous.get('inputs',{})) if previous else {}
-    if previous and set(inputs['files'])-set(sources):raise ValueError('已有复核任务不能更换材料')
-    if not previous:
-        for name in inputs['files']:sources[name]=await asyncio.to_thread(content.put,resolve(ctx,name))
-    record={**(previous or {}),'task_id':tid,'purpose':'document_review','task':inputs['task'],
-            'source_version':version,'pdf_sha256':pdf_hash,'inputs':sources,'status':'running'}
+    if previous and previous.get('purpose')!='document_review':
+        raise ValueError('计算子任务不能改为只读复核，请创建新任务')
+    data=await project.compile_project(ctx.research)
+    if not data['compile']['success']:raise ValueError(data['compile']['error_summary'])
+    await ctx.events.file_changed('paper.pdf')
+    sources={name:resolve(ctx,name) for name in inputs['files'] or (previous or {}).get('inputs',[])}
+    record={'task_id':tid,'purpose':'document_review','task':inputs['task'],
+            'inputs':list(sources),'status':'running'}
     def save():
         with store._transaction() as db:db.execute('INSERT OR REPLACE INTO commands VALUES (?,?,?,?)',
             (store.research_id,key,tid,json.dumps(record,ensure_ascii=False)))
-    if previous and previous.get('status')=='completed' and previous['task']==inputs['task']:
-        return CapabilityProduct('research_state',{**previous,'current':project.snapshot(ctx.workspace)['version']==version})
-    manifest=json.loads((archive/'manifest.json').read_text());seen=set(record.get('reviewed_pages',[]))
+    manifest=project.files(ctx.workspace);seen=set()
     async def pages(pages:list[int]):
         if not 1<=len(pages)<=4:raise ValueError('每次读取1至4页')
-        value=await asyncio.to_thread(render_pages,ctx.workspace,version,pdf_hash,pages)
+        value=await asyncio.to_thread(render_pages,ctx.workspace,pages)
         seen.update(pages);record['reviewed_pages']=sorted(seen);save()
         return value
     async def read(path:str,start:int=0,limit:int=12000):
-        if path in manifest:source=archive/path
-        elif path in sources:source=content.path(sources[path])
-        else:raise ValueError('只能读取固定版本源码与指定材料')
+        if path in manifest:source=ctx.workspace/path
+        elif path in sources:source=sources[path]
+        else:raise ValueError('只能读取当前稿件源码与指定材料')
         _,text=await asyncio.to_thread(text_file,source,Path(path).suffix)
         start=max(0,start);limit=min(max(limit,1),24000)
-        return {'path':path,'source_version':version,'excerpt':text[start:start+limit],'total_chars':len(text)}
-    tools=[StructuredTool.from_function(coroutine=pages,name='view_pdf_pages',description='读取固定PDF的实际页面；每次1至4页，页码从1开始。'),
-           StructuredTool.from_function(coroutine=read,name='read_file',description='读取固定版本正文和分配材料，返回文本。')]
-    @wrap_tool_call
-    async def visual(request,handler):
-        from ai_system.agent.runtime import call_tool
-        message=await call_tool(local,request.tool_call,lambda:handler(request),access='read')
-        if message.status=='error':return message
-        if request.tool_call['name']=='view_pdf_pages':
-            value=json.loads(message.content)
-            return message.model_copy(update={'content':tool_content(ctx,value,ctx.coder_llm)})
-        return message
+        return {'path':path,'excerpt':text[start:start+limit],'total_chars':len(text)}
+    tools=[StructuredTool.from_function(coroutine=pages,name='view_pdf_pages',description='读取当前PDF的实际页面；每次1至4页，页码从1开始。'),
+           StructuredTool.from_function(coroutine=read,name='read_file',description='读取当前稿件源码和分配材料，返回文本。')]
     local=copy.copy(ctx);local.agent_messages=[];local.tool_gates=None
-    prompt=('你是主研究Agent按需调用的只读论文复核者，复用同一总预算。只检查指定固定版本，不能编辑正文、运行计算或再委派。'
+    prompt=('你是主研究Agent按需调用的只读论文复核者，复用同一总预算。检查当前稿件，不能编辑正文、运行计算或再委派。'
+            '每次复核都重新读取本次需要的页面与源码，之前的复核意见仅供参考。'
             '先查看实际PDF页，再按疑点读取源码和指定材料。区分排版、原要求缺项、数值与计算口径疑点；没有图像能力时明确仅做文本复核。'
-            '返回具体问题：source_version、pdf_sha256、页码、严重程度、类别、观察到什么、支持材料、建议主Agent怎么核实；说明已看页码与未检查范围。'
+            '返回具体问题：页码、严重程度、类别、观察到什么、支持材料、建议主Agent怎么核实；说明已看页码与未检查范围。'
             '没有依据不能说计算通过。建议仅供主Agent判断，不生成改稿或自动验收结论。')
     save()
     try:
         with execution_scope(step='论文只读复核',subject=tid):
-            async with session_saver(ctx) as saver:
-                agent=create_agent(model=ctx.coder_llm,tools=tools,system_prompt=prompt,checkpointer=saver,
-                    middleware=[ContextMiddleware(local,ctx.coder_llm,store.research_id+'-review-'+tid,pinned={
-                        'source_version':version,'pdf_sha256':pdf_hash,'files':list(manifest),'materials':sources}),visual])
-                result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])],ctx=local)
+            agent=AgentLoop(ctx.coder_llm,tools,prompt,ctx=local,
+                context=ContextManager(local,ctx.coder_llm,store.research_id+'-review-'+tid,
+                    pinned={'paper_path':'paper.pdf','files':list(manifest),'materials':list(sources)}))
+            result=await run_session(agent,store.research_id+'-review-'+tid,[HumanMessage(content=inputs['task'])],ctx=local)
         record.update(status='completed',answer='\n\n'.join(public_progress(result['messages'][-1].content)),reviewed_pages=sorted(seen))
     except BaseException:
         record['status']='interrupted';raise
     finally:save()
-    return CapabilityProduct('research_state',{**record,'current':project.snapshot(ctx.workspace)['version']==version,
-        'advisory':True,'note':'复核意见绑定该版本；由主Agent决定修改，未自动判定论文通过。'})
+    return CapabilityProduct('research_state',{**record,'paper_path':'paper.pdf',
+        'advisory':True,'note':'已只读复核当前稿件；由主Agent决定修改，未自动判定论文通过。'})
 
 
 def register(registry):
     registry.register('research','research.delegate','research_state',delegate,DelegateInput,model_callable=True,
-        purpose='按需委派调查、计算或只读PDF复核，复用现有会话和总预算。document_review需writing_preview返回的source_version和pdf_sha256；只能看固定版本与指定材料，不能改论文或运行代码。用task_id继续子任务。')
+        purpose='按需委派调查、计算或只读PDF复核，复用现有会话和总预算。document_review编译或复用当前稿件的PDF，读取当前源码与指定材料，主Agent等待复核完成后再修改。用task_id继续子任务。')

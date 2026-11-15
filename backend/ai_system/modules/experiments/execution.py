@@ -63,7 +63,7 @@ def strip_template_tokens(code: str) -> str:
 
 
 def solution_code_path(subproblem_id: str) -> str:
-    return f"code/{subproblem_id}_solution.py"
+    return f"outputs/code-history/{subproblem_id}_solution.py"
 
 
 def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Dict]) -> None:
@@ -111,7 +111,7 @@ def export_solution_code(ctx: GraphContext, subproblem_id: str, run_log: List[Di
             + getsource(choose_font) + '\nmatplotlib.rcParams["font.sans-serif"] = [choose_font({f.name for f in fontManager.ttflist})]\n'
             + 'matplotlib.rcParams["axes.unicode_minus"] = False\n\n')
     try:
-        ctx.fs.write_text(solution_code_path(subproblem_id), header + body)
+        ctx.fs.write_text(solution_code_path(subproblem_id), header + body,kind='code_history',created_by='system')
     except Exception as exc:  # 只是给后续子问题的参考，失败不影响本问
         logger.warning("保存 %s 的代码失败: %s", subproblem_id, exc)
 

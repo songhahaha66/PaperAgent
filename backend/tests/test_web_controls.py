@@ -87,7 +87,7 @@ def test_pause_waits_for_saved_partial_output_and_notifies_the_websocket(monkeyp
     monkeypatch.setattr('services.data_services.crud.get_work',lambda *args:work)
     monkeypatch.setattr('services.data_services.crud.update_work_status',lambda db,w,status:setattr(work,'status',status))
     monkeypatch.setattr(chat,'ChatService',ChatService)
-    monkeypatch.setattr(chat,'PaperGraphAgent',Agent)
+    monkeypatch.setattr(chat,'PaperAgent',Agent)
     monkeypatch.setattr(chat,'get_workspace_path',lambda work_id:root)
     monkeypatch.setattr(chat,'LLMHandler',lambda **kw:SimpleNamespace(get_llm_instance=lambda:None))
     monkeypatch.setattr(chat,'setup_environment_from_db',lambda *a:SimpleNamespace(get_workspace_dir=lambda:str(root),config_manager=SimpleNamespace(get_model_config=lambda *a:None)))

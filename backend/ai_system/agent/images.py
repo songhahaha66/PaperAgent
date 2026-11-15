@@ -192,9 +192,9 @@ class ImageProjection:
             public['image_refs']=value['_images']
             shown={row['page'] for _,row,_ in rows}
             public['visual_pages']=sorted(shown)
-            if rows:public['visual_review']='本次请求附实际页面图像；未附的页面仅保留文本及固定版本重读入口。'
+            if rows:public['visual_review']='本次请求附实际页面图像；未附的页面仅保留文本与图片引用，可按需重新读取。'
             elif self.policy.disabled_reason:public['visual_review']=self.policy.disabled_reason
-            else:public['visual_review']='当前未附图片，仅有PDF文本；不能声称已做视觉检查。可按source_version、pdf_sha256和页码重新writing_preview。'
+            else:public['visual_review']='当前未附图片，仅有PDF文本；不能声称已做视觉检查。可按路径和页码重新读取，writing_preview查看当前稿件。'
             blocks=[{'type':'text','text':json.dumps(public,ensure_ascii=False)}]
             blocks.extend({'type':'image_ref','image_ref':row,'tokens':cost} for _,row,cost in rows)
             if rows and self.policy.strategy=='deepseek':
@@ -202,7 +202,6 @@ class ImageProjection:
                 # tool response before adding the derived image-bearing user turn.
                 output.append(message.model_copy(update={'content':blocks[0]['text']}))
                 pending.append({'type':'text','text':json.dumps({'tool_call_id':message.tool_call_id,
-                    'source_version':value.get('source_version'),'pdf_sha256':value.get('pdf_sha256'),
                     'visual_pages':sorted(shown)},ensure_ascii=False)})
                 pending.extend(blocks[1:])
             else:output.append(message.model_copy(update={'content':blocks if rows else blocks[0]['text']}))
@@ -215,7 +214,7 @@ class ImageProjection:
         return output
 
     def original_tokens(self,messages,estimate):
-        total=estimate([message.model_dump() for message in messages])
+        total=estimate(messages)
         if self.policy.enabled:
             for message in messages:
                 value=image_value(message)

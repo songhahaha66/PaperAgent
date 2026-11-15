@@ -18,23 +18,27 @@ PLAN_REMINDER_INTERVAL = 10
 
 
 def plan_reminder(ctx, messages):
-    """A request-only tail, derived from canonical history across compaction/resume."""
+    """One durable reminder per successful plan update, preserving the prefix."""
     from langchain_core.messages import HumanMessage, ToolMessage
 
     calls = 0
+    plan_id='initial'
     for message in reversed(messages):
         if not isinstance(message, ToolMessage):
             continue
         if message.name == 'research_update_plan' and message.status != 'error':
+            plan_id=message.id or message.tool_call_id
             break
         calls += 1
-    if calls < PLAN_REMINDER_INTERVAL:
+    identity='plan-reminder:'+plan_id
+    if calls < PLAN_REMINDER_INTERVAL or any(message.id==identity for message in messages):
         return []
     plan = ctx.research.snapshot().get('progress_plan')
     current = json.dumps(plan['steps'], ensure_ascii=False) if plan else '尚未保存总体研究计划'
     return [HumanMessage(
         content=f'计划可能已过期：已连续 {calls} 次工具调用未成功更新计划。\n当前计划：{current}\n'
-                '请核对当前目标与实际进展，按需用 research_update_plan 更新计划，再继续工作。',
+                '请核对当前目标与实际进展，按需用 research_update_plan 更新计划，再继续工作；之后以新计划回执为准。',
+        id=identity,
         additional_kwargs={'plan_reminder': True})]
 
 

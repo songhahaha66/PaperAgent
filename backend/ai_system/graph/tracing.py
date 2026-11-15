@@ -36,12 +36,7 @@ def labelled(label: str):
 
 
 def _node(metadata: Optional[Dict[str, Any]]) -> str:
-    """外层图节点名：子 agent 内部的节点（model、tools）挂在 checkpoint_ns 的第一段下"""
-    metadata = metadata or {}
-    namespace = str(metadata.get("langgraph_checkpoint_ns") or "")
-    if namespace:
-        return namespace.split("|")[0].split(":")[0]
-    return str(metadata.get("langgraph_node") or "")
+    return str((metadata or {}).get('agent_session') or '')
 
 
 def _usage(response) -> Dict[str, int]:

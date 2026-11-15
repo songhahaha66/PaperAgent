@@ -1,15 +1,15 @@
 """Native LaTeX document assembly and PDF compilation. No Markdown conversion."""
 
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-from .markdown_prep import run_command
-from ai_system.sandbox.commands import sandbox_operation
+from ai_system.sandbox.commands import run_latex, sandbox_operation
 from ai_system.text_syntax import has_markdown
+from .latex_worker import BUILD_DIR
 
-BUILD_DIR = ".build/latex"
 COMPILE_TIMEOUT = 180
 
 
@@ -140,28 +140,19 @@ async def compile_pdf(workspace: Path, tex_name: str = "paper.tex", *, verified_
     if result.diagnostics:
         transcript.append('\n\n'.join(d['message']+'\n'+d['context'] for d in result.diagnostics))
         return finish('LaTeX 源码检查失败：'+summary())
-    cmd = ["xelatex", "-no-shell-escape", "-file-line-error", "-interaction=nonstopmode", "-halt-on-error", f"-output-directory={BUILD_DIR}", tex_name]
     log_file = build / f"{stem}.log"
-    log_file.unlink(missing_ok=True)
     log = ''
     try:
-        for iteration in range(3):  # bibliography, then resolve cross-references
-            code, out, err = await run_command(cmd, workspace, timeout=COMPILE_TIMEOUT)
-            result.exit_code = code
-            log = log_file.read_text(encoding='utf-8', errors='replace') if log_file.exists() else out+'\n'+err
-            transcript.append(f'xelatex pass {iteration+1}, exit {code}\n'+out+'\n'+err+'\n'+log)
-            if code != 0: break
-            if iteration == 0:
-                aux = build / f"{stem}.aux"
-                if aux.exists() and r'\bibdata{' in aux.read_text(errors='replace'):
-                    code, out, err = await run_command(['bibtex', f'{BUILD_DIR}/{stem}'], workspace, timeout=COMPILE_TIMEOUT)
-                    result.exit_code = code
-                    blg = build/f'{stem}.blg'
-                    biblog = blg.read_text(errors='replace') if blg.exists() else out+'\n'+err
-                    transcript.append(f'bibtex, exit {code}\n'+out+'\n'+err+'\n'+biblog)
-                    if code != 0:
-                        result.diagnostics = compile_diagnostics(biblog)
-                        return finish('参考文献编译失败：'+(summary() if result.diagnostics else biblog.strip()[:1200]))
+        code, out, err = await run_latex(tex_name, workspace, timeout=COMPILE_TIMEOUT)
+        result.exit_code = code
+        job = json.loads(out)
+        transcript.append((workspace / result.log_path).read_text(encoding='utf-8'))
+        log = (workspace / job['log_path']).read_text(encoding='utf-8', errors='replace')
+        if job['timed_out']:
+            return finish('编译进程未完成：'+job['error'])
+        if job['failed_stage'] == 'bibtex':
+            result.diagnostics = compile_diagnostics(log)
+            return finish('参考文献编译失败：'+(summary() if result.diagnostics else log.strip()[:1200]))
     except Exception as exc:
         from ai_system.research.review_cache import error_detail
         transcript.append(getattr(exc, 'sandbox_stdout', '') + '\n' + getattr(exc, 'sandbox_stderr', ''))

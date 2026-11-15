@@ -14,7 +14,7 @@ from ai_system.research.questions import delivery_status
 from ai_system.research.control import graph_view,refresh_registry
 from ai_system.research.domain import current_results
 from ai_system.research.feedback import ReportEdit,interpretation_version,revise_interpretation
-from ai_system.research.loop import prepare_action,resume
+from ai_system.research.session import run_research,resume
 from ai_system.research.models import WorkerResult, IssueReport
 from ai_system.research.planner import decision_context
 from ai_system.research.store import ResearchStore
@@ -49,8 +49,8 @@ def test_answer_without_scalar_refs_delivers_without_recomputation(tmp_path):
         return tool('research_deliver',{'title':'已有结果与未知','reason':'保留实际结果及未完成部分'},'deliver')
     model=ResearchToolsModel(respond=respond)
     ctx=GraphContext.create(str(tmp_path),planner_llm=model);ctx.research=store
-    assert not asyncio.run(prepare_action(ctx))
-    assert model.calls==1 and store.snapshot()['publication']['stage']=='export'
+    assert asyncio.run(run_research(ctx))['status']=='completed'
+    assert model.calls==1 and store.snapshot()['outcome']=='completed'
     assert store.snapshot()['executions']==executions
 
 

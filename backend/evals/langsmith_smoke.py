@@ -9,8 +9,7 @@ from typing import TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from langgraph.graph import END, START, StateGraph
-from langsmith import Client
+from langsmith import Client,trace
 from langsmith.utils import LangSmithNotFoundError
 
 from ai_system.config.observability import research_tracing, tracing_status
@@ -36,14 +35,10 @@ async def run_smoke():
         await registry.invoke(CapabilityRequest(name='smoke.check'), None)
         return {'answer': reply.content}
 
-    builder = StateGraph(SmokeState)
-    builder.add_node('observe', observe)
-    builder.add_edge(START, 'observe')
-    builder.add_edge('observe', END)
-    run_id = uuid.uuid4()
-    with research_tracing('langsmith-smoke', str(run_id), 'smoke'):
-        await builder.compile().ainvoke({'question': 'Check tracing; no external model request.'},
-                                        {'run_name': 'PaperAgent.smoke', 'run_id': run_id})
+    run_id=uuid.uuid4()
+    with research_tracing('langsmith-smoke',str(run_id),'smoke'), trace('PaperAgent.smoke',id=run_id):
+        await model.ainvoke('Check tracing; no external model request.')
+        await registry.execute('smoke.check',{},None)
     return run_id
 
 
@@ -72,7 +67,7 @@ async def main():
         await asyncio.sleep(1)
     else:
         raise RuntimeError(f'追踪已提交但尚未读回完整子步骤：{run_id}')
-    print('LangSmith 已验证接收 graph / model / capability trace：')
+    print('LangSmith 已验证接收 agent / model / capability trace：')
     print(client.get_run_url(run=run))
 
 

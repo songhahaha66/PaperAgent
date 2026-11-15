@@ -33,7 +33,34 @@ class AgentStore:
                     signature TEXT NOT NULL, result TEXT NOT NULL, PRIMARY KEY(thread_id, call_id));
                 CREATE TABLE IF NOT EXISTS tool_calls(thread_id TEXT NOT NULL, call_id TEXT NOT NULL,
                     signature TEXT NOT NULL, PRIMARY KEY(thread_id, call_id));
+                CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, status TEXT NOT NULL, reason TEXT);
+                CREATE TABLE IF NOT EXISTS session_messages(sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(session_id,id));
             ''')
+
+    def messages(self, session):
+        from langchain_core.messages import messages_from_dict
+        with closing(self.connect()) as db:
+            rows=db.execute('SELECT payload FROM session_messages WHERE session_id=? ORDER BY sequence',(session,)).fetchall()
+        return messages_from_dict([json.loads(row[0]) for row in rows])
+
+    def append_message(self, session, message):
+        from langchain_core.messages import message_to_dict
+        from uuid import uuid4
+        if not message.id:message.id=uuid4().hex
+        with self.transaction() as db:
+            db.execute('INSERT OR IGNORE INTO session_messages(session_id,id,payload) VALUES (?,?,?)',
+                       (session,message.id,json.dumps(message_to_dict(message),ensure_ascii=False)))
+
+    def set_session(self, session, status, reason=None):
+        with self.transaction() as db:
+            db.execute('INSERT INTO sessions VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,reason=excluded.reason',
+                       (session,status,reason))
+
+    def session(self, session):
+        with closing(self.connect()) as db:
+            row=db.execute('SELECT status,reason FROM sessions WHERE id=?',(session,)).fetchone()
+        return dict(row) if row else None
 
     def connect(self):
         db = sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True, timeout=30) if self.read_only else sqlite3.connect(self.path, timeout=30)

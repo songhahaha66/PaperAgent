@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import time
 
 from services.file_services.file_helper import atomic_write
 from services.file_services.workspace_layout import safe_join, relative_parts, PRIVATE_NAMES
@@ -35,7 +36,7 @@ def input_files(fs, *, compiler=False, verified_snapshot=False, names=None):
             found[name]=fs.canonical_artifact(name) if name.startswith('outputs/research/') and not verified_snapshot else safe_join(fs.root,name)
         if compiler and (fs.root/'.build/reference.docx').exists():found['.build/reference.docx']=safe_join(fs.root,'.build/reference.docx')
         return found
-    roots=[fs.root] if compiler else [fs.abs(p) for p in ('data','attachment','code','outputs/intermediate')]
+    roots=[fs.root] if compiler else [fs.abs(p) for p in ('data','attachment','code','config','outputs/intermediate')]
     found={}
     for root in roots:
         if not root.exists():continue
@@ -66,6 +67,19 @@ class WorkspaceTransfer:
         from .content_store import ContentStore
         self.content = ContentStore(fs.root, settings.max_file_bytes)
         self.seen=None
+        self.reset_metrics()
+
+    def reset_metrics(self):
+        self.metrics={'file_api_calls':{},'file_api_seconds':{},'uploaded_bytes':0,'downloaded_bytes':0,'cache_bytes':0}
+
+    async def call(self, operation, *args, **kwargs):
+        started=time.monotonic()
+        calls=self.metrics['file_api_calls'];calls[operation]=calls.get(operation,0)+1
+        try:
+            return await getattr(self.session,operation)(*args,**kwargs)
+        finally:
+            seconds=self.metrics['file_api_seconds']
+            seconds[operation]=round(seconds.get(operation,0)+time.monotonic()-started,4)
 
 
     async def sync_inputs(self, run_id=None):
@@ -73,26 +87,27 @@ class WorkspaceTransfer:
                   for name in self.fs.get_run_info(run_id)['input_hashes']} if run_id else
                  input_files(self.fs,compiler=self.compiler,verified_snapshot=self.verified_snapshot,names=self.input_names))
         desired={p:bounded_hash(source,self.settings.max_file_bytes) for p,source in sources.items()}
-        previous=self.seen if self.seen is not None else await self.session.input_versions()
+        previous=self.seen if self.seen is not None else await self.call('input_versions')
         check=desired if self.seen is None else {p:h for p,h in desired.items() if self.seen.get(p)!=h}
-        actual={row['path']:row['sha256'] for row in await self.session.inventory(list(check),kind='compiler' if self.compiler else 'python')} if check else {}
+        actual={row['path']:row['sha256'] for row in await self.call('inventory',list(check),kind='compiler' if self.compiler else 'python')} if check else {}
         for path,digest in check.items():
             relative(path,compiler=self.compiler)
             if actual.get(path)!=digest:
-                await self.session.upload(path,sources[path],digest)
+                await self.call('upload',path,sources[path],digest)
+                self.metrics['uploaded_bytes']+=sources[path].stat().st_size
         for path in set(previous)-set(desired):
             relative(path,compiler=self.compiler)
-            await self.session.delete_input(path)
+            await self.call('delete_input',path)
         if previous != desired:
-            await self.session.save_input_versions(desired)
+            await self.call('save_input_versions',desired)
         self.seen=desired
         return desired
 
     async def freeze_actual_inputs(self, run_id):
         """Retain live remote input mutations without merging them into user files."""
         info=self.fs.get_run_info(run_id)
-        rows=await self.session.inventory(kind='inputs')
-        extra=await self.session.inventory(list(self.seen or {})) if self.seen else []
+        prepared=await self.call('prepare_inputs',list(self.seen or {}))
+        rows=prepared['inputs'];extra=prepared['selected']
         actual={row['path']:row['sha256'] for row in rows+extra}
         for name in actual:relative(name)
         baseline=info.get('input_hashes',{})
@@ -101,7 +116,7 @@ class WorkspaceTransfer:
         # A remote-generated data file may never have a public backend copy.
         archived={name:version for name,version in actual.items() if self.content.has(version,sizes[name])}
         snapshot_id='input_'+run_id
-        manifest=await self.session.capture_inputs(snapshot_id,archived,list(actual))
+        manifest=await self.call('capture_inputs',snapshot_id,archived,list(actual))
         if manifest.get('run_id')!=snapshot_id:raise ValueError('Input receipt mismatch')
         received=set()
         for row in manifest['files']:
@@ -123,6 +138,7 @@ class WorkspaceTransfer:
         info['input_snapshot_id']=self.content.snapshot({name:{'sha256':version,'size':sizes[name]}
                                                         for name,version in actual.items()})
         self.fs._save_manifest()
+        return prepared['runtime']
 
     def validate(self, manifest, run_id):
         if manifest.get('run_id')!=run_id or not isinstance(manifest.get('files'),list):raise ValueError('Output receipt mismatch')
@@ -139,22 +155,24 @@ class WorkspaceTransfer:
 
     async def obtain_manifest(self, run_id, baseline, *, recover=False):
         if recover:
-            manifest=await self.session.frozen(run_id)
+            manifest=await self.call('frozen',run_id)
         else:
-            manifest=await self.session.capture(run_id,baseline,kind='compiler' if self.compiler else 'runtime')
+            manifest=await self.call('capture',run_id,baseline,kind='compiler' if self.compiler else 'runtime')
         return self.validate(manifest,run_id)
 
     async def download(self, row, target):
         if self.content.has(row['sha256'],row['size']):
+            self.metrics['cache_bytes']+=row['size']
             self.content.materialize(row['sha256'],target)
             return
         target.parent.mkdir(parents=True,exist_ok=True)
         fd,name=tempfile.mkstemp(prefix='.download-',dir=target.parent);os.close(fd)
         temporary=Path(name)
         try:
-            await self.session.download(row['snapshot'],temporary,self.settings.max_file_bytes)
+            await self.call('download',row['snapshot'],temporary,self.settings.max_file_bytes)
             if temporary.stat().st_size!=row['size'] or bounded_hash(temporary,self.settings.max_file_bytes)!=row['sha256']:
                 raise ValueError('Output size/checksum mismatch; original file preserved')
+            self.metrics['downloaded_bytes']+=row['size']
             # Commit through the pinned directory implementation, not a remotely controlled path.
             self.content.put(temporary,row['sha256'])
             self.content.materialize(row['sha256'],target)

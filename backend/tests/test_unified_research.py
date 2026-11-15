@@ -36,16 +36,15 @@ def test_final_render_refuses_unchecked_citation_before_publishing(tmp_path):
     assert not (tmp_path/'paper.md').exists()
 
 
-def test_cancelled_graph_records_paused_checkpoint_without_resetting_budget(tmp_path):
-    from types import SimpleNamespace
-    from ai_system.graph.agent import PaperGraphAgent
-    class Graph:
-        async def aget_state(self,config):return SimpleNamespace(values={})
-        async def ainvoke(self,*args,**kwargs):raise asyncio.CancelledError()
+def test_cancelled_loop_records_pause_without_resetting_budget(tmp_path,monkeypatch):
+    from ai_system.agent.agent import PaperAgent
+    import ai_system.research.session as session
+    async def cancelled(ctx):raise asyncio.CancelledError()
+    monkeypatch.setattr(session,'run_research',cancelled)
     runtime=ResearchRuntime(tmp_path);runtime.reserve('example.test')
-    agent=PaperGraphAgent(None,workspace_dir=str(tmp_path))
+    agent=PaperAgent(None,workspace_dir=str(tmp_path))
     with pytest.raises(asyncio.CancelledError):
-        asyncio.run(agent._invoke(Graph(),None,{},'same-study',SimpleNamespace()))
-    saved=json.loads((workspace_path(tmp_path, '.system/graph_thread.json')).read_text())
+        asyncio.run(agent._invoke('same-study',agent._context()))
+    saved=json.loads(workspace_path(tmp_path,'.system/graph_thread.json').read_text())
     assert saved['status']=='paused' and saved['thread_id']=='same-study'
     assert runtime.status()['used']==1

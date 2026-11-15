@@ -27,6 +27,13 @@ def test_graphicspath_assets_are_included_in_the_immutable_source_snapshot(tmp_p
     assert (archive/'results/figures/curve.pdf').read_bytes()==b'original curve'
     (tmp_path/'results/figures/curve.pdf').write_bytes(b'changed curve')
     assert project.snapshot(tmp_path)['version']!=before['version']
+    (tmp_path/'sections').mkdir()
+    (tmp_path/'sections/part.tex').write_text(r'\includegraphics{results/figures/curve.pdf}\input{appendix}')
+    (tmp_path/'appendix.tex').write_text('Appendix at the compiler working directory.')
+    (tmp_path/'paper.tex').write_text(r'\input{sections/part}')
+    missing=[]
+    assert {'results/figures/curve.pdf','appendix.tex'}<=set(project.files(tmp_path,missing=missing))
+    assert not missing
 
 
 def test_graphicspath_handles_whitespace_and_multiple_directories(tmp_path):
@@ -163,47 +170,25 @@ def test_compile_diagnostic_routes_to_existing_repair_and_only_compiler_closes_i
 
 
 def test_compile_failure_returns_to_research_without_replaying_calculation(native,monkeypatch):
-    from ai_system.research import loop
     from ai_system.graph.context import GraphContext
-    store=native.store;ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
-    before=store.snapshot()['executions']
-    async def failed(ctx):return {'issues':[{'message':'编译错误，读取日志后修正'}],'exports':[]}
-    monkeypatch.setattr('ai_system.modules.writing.export._latex',failed)
-    with store._transaction() as db:
-        state=store._read(db);state['publication']={'stage':'export','repair_inputs':[],'repairs':0};state['outcome']='running'
-        action=loop._set_action(state,'writing.export',{},'导出当前源码')
-        store._save(db,state,'test_compile_failure',{})
-    asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))
-    assert store.snapshot()['publication'] is None
-    assert store.snapshot()['action']['result']['issues']
-    assert store.snapshot()['executions']==before
-    # A tool exception must also reach the live Agent, with a failed receipt.
-    async def unavailable(ctx):raise ValueError('controlled export failure')
-    monkeypatch.setattr('ai_system.modules.writing.export._latex',unavailable)
-    with store._transaction() as db:
-        state=store._read(db);state['publication']={'stage':'export'}
-        action=loop._set_action(state,'writing.export',{},'导出当前源码')
-        store._save(db,state,'retry_export',{})
-    asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))
-    assert store.snapshot()['action']['status']=='failed'
-    assert loop.select({},SimpleNamespace(context=ctx))=='observe'
-    assert asyncio.run(loop._act({'action_id':action['id']},SimpleNamespace(context=ctx)))=={}
-    loop.resume(store)
-    assert store.snapshot()['action']['status']=='failed'
+    from ai_system.research.session import run_research
     from langchain_core.messages import ToolMessage
     from research_tools_helpers import ResearchToolsModel,tool
+    store=native.store;ctx=GraphContext.create(str(store.root),planner_llm=None,output_mode='latex');ctx.research=store
+    before=store.snapshot()['executions']
+    async def unavailable(ctx):raise ValueError('controlled export failure')
+    monkeypatch.setattr('ai_system.modules.writing.export._latex',unavailable)
     ctx.fs.register_file('part.tex',kind='document',created_by='ai',visibility='user')
     def respond(messages):
         rows=[m for m in messages if isinstance(m,ToolMessage)]
-        assert all(m.status!='error' for m in rows), [m.content for m in rows]
-        if not rows:
-            assert any('controlled export failure' in str(m.content) for m in messages)
-            return tool('research_read_artifact',{'path':'part.tex'},'read')
+        if not rows:return tool('writing_export',{},'export')
         if len(rows)==1:
-            return tool('writing_edit',{'path':'part.tex','content':'修正后的正文，保留结果与局限。'},'edit')
-        return tool('research_deliver',{'title':'修正后的报告'},'deliver')
+            assert rows[0].status=='error' and 'controlled export failure' in rows[0].content
+            return tool('research_read_artifact',{'path':'part.tex'},'read')
+        if len(rows)==2:return tool('writing_edit',{'path':'part.tex','content':'修正后的正文，保留结果与局限。'},'edit')
+        return tool('research_pause',{'message':'修订已保存，等待继续编译。'},'pause')
     ctx.planner_llm=ResearchToolsModel(respond=respond)
-    assert not asyncio.run(loop.prepare_action(ctx))
-    assert '修正后的正文' in (store.root/'part.tex').read_text()
-    assert store.snapshot()['action']['capability']=='writing.export'
-    assert store.snapshot()['executions']==before
+    result=asyncio.run(run_research(ctx))
+    assert result['status']=='paused' and '修正后的正文' in (store.root/'part.tex').read_text()
+    assert store.snapshot()['action'] is None and store.snapshot()['executions']==before
+    assert any(item['tool_name']=='writing.export' and item['status']=='failed' for item in store.snapshot()['items'])

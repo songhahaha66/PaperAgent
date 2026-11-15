@@ -126,19 +126,21 @@ def test_asset_is_versioned_and_never_overwrites_a_previous_selection(tmp_path):
     asyncio.run(run())
 
 
-def test_actual_pdf_pages_and_model_images_are_version_bound(tmp_path):
+def test_actual_pdf_pages_and_model_images_use_current_pdf(tmp_path):
     import pypdfium2 as pdfium
-    from ai_system.modules.writing.document import render_pages,tool_content
-    pdf=tmp_path/'example.pdf'
+    from ai_system.modules.writing.document import PreviewInput,render_pages,tool_content
+    assert set(PreviewInput.model_json_schema()['properties'])=={'pages'}
+    pdf=tmp_path/'paper.pdf'
     with pdfium.PdfDocument.new() as doc:
         doc.new_page(600,800);doc.new_page(600,800);doc.save(pdf)
-    content=ContentStore(tmp_path,20_000_000);pdf_hash=content.put(pdf);version='a'*64
-    archive=workspace_path(tmp_path,project.VERSIONS)/version
-    project.atomic_text(archive/'builds'/f'{pdf_hash}.json',json.dumps({'source_version':version,'pdf_sha256':pdf_hash,'warnings':['Overfull box']}))
-    result=render_pages(tmp_path,version,pdf_hash,[2])
+    pdf_hash=hashlib.sha256(pdf.read_bytes()).hexdigest()
+    project.atomic_text(workspace_path(tmp_path,project.META),json.dumps({'pdf_sha256':pdf_hash,'compile':{'warnings':['Overfull box']}}))
+    result=render_pages(tmp_path,[2])
     assert result['total_pages']==2 and result['_images'][0]['page']==2
+    assert result['path']=='paper.pdf' and result['warnings']==['Overfull box']
+    assert not {'source_version','pdf_sha256'} & result.keys()
     ctx=SimpleNamespace(workspace=tmp_path)
-    from ai_system.graph.images import ImageProjection
+    from ai_system.agent.images import ImageProjection
     from langchain_core.messages import ToolMessage
     receipt=ToolMessage(content=tool_content(ctx,result,None),tool_call_id='preview')
     assert 'base64' not in receipt.content
@@ -147,8 +149,7 @@ def test_actual_pdf_pages_and_model_images_are_version_bound(tmp_path):
     assert image[1]['image_url']['url'].startswith('data:image/png;base64,')
     text=ImageProjection(tmp_path,SimpleNamespace(metadata={'generation_settings':{'image_inputs':False}}),{}).view([receipt],max_tokens=10000)[0]
     assert '不能声称已做视觉检查' in text.content
-    with pytest.raises(ValueError,match='超出范围'):render_pages(tmp_path,version,pdf_hash,[3])
-    with pytest.raises(FileNotFoundError):render_pages(tmp_path,'b'*64,pdf_hash,[1])
+    with pytest.raises(ValueError,match='超出范围'):render_pages(tmp_path,[3])
 
 
 def test_snapshot_push_coalesces_and_stops_after_close():
@@ -171,14 +172,21 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
     from langchain_core.messages import AIMessage,ToolMessage
     from research_tools_helpers import ResearchToolsModel,tool
     from ai_system.modules.registry import invoke
-    answer='第1页已看；仅复核提供的版本，未执行计算。'
+    from ai_system.modules.delegation import DelegateInput
+    from ai_system.export.latex import LatexResult
+    assert not {'source_version','pdf_sha256'} & DelegateInput.model_json_schema()['properties'].keys()
+    answer='第1页已看；已复核当前稿件，未执行计算。'
+    steps=0
     def child(messages):
+        nonlocal steps
+        step=steps%3;steps+=1
         receipts=[m for m in messages if isinstance(m,ToolMessage)]
-        if not receipts:return tool('view_pdf_pages',{'pages':[1]},'review-page')
-        if len(receipts)==1:
-            assert isinstance(receipts[0].content,list)
-            assert receipts[0].content[1]['type']=='image_url'
-            return tool('read_file',{'path':'paper.tex'},'review-source')
+        if step==0:return tool('view_pdf_pages',{'pages':[1]},'review-page-'+str(steps))
+        if step==1:
+            assert isinstance(receipts[-1].content,list)
+            assert receipts[-1].content[1]['type']=='image_url'
+            return tool('read_file',{'path':'paper.tex'},'review-source-'+str(steps))
+        assert json.loads(receipts[-1].content)['excerpt']==(tmp_path/'paper.tex').read_text()
         return AIMessage(content=[
             {'type':'reasoning','encrypted_content':'private-encrypted-marker','text':'private-reasoning-marker'},
             {'type':'text','text':answer},
@@ -186,28 +194,32 @@ def test_review_task_reads_actual_pdf_without_writer_or_kernel(tmp_path,monkeypa
     model=ResearchToolsModel(respond=child,profile={'max_input_tokens':128000},metadata={})
     ctx=context(tmp_path);ctx.coder_llm=model
     (tmp_path/'paper.tex').write_text(r'\begin{document}Known manuscript\end{document}')
-    version=project.snapshot(tmp_path)['version'];pdf=tmp_path/'paper.pdf'
-    with pdfium.PdfDocument.new() as doc:doc.new_page(600,800);doc.save(pdf)
-    content=ContentStore(tmp_path,20_000_000);pdf_hash=content.put(pdf)
-    archive=workspace_path(tmp_path,project.VERSIONS)/version
-    project.atomic_text(archive/'builds'/f'{pdf_hash}.json',json.dumps({'source_version':version,'pdf_sha256':pdf_hash}))
+    builds=[]
+    async def compile_fixture(staging,main,**kwargs):
+        text=(staging/main).read_text();builds.append(text)
+        if text=='broken':return LatexResult(main,error='controlled compile error')
+        with pdfium.PdfDocument.new() as doc:doc.new_page(600,800);doc.save(staging/'paper.pdf')
+        return LatexResult(main,pdf_path='paper.pdf',pages=1)
+    monkeypatch.setattr('ai_system.export.latex.compile_pdf',compile_fixture)
     def forbidden(*args,**kwargs):raise AssertionError('review must not access an execution kernel')
     monkeypatch.setattr(ctx.kernels,'get',forbidden)
     async def run():
-        value=await invoke(ctx,'research.delegate',purpose='document_review',task='逐页检查实际稿件',
-            source_version=version,pdf_sha256=pdf_hash)
+        value=await invoke(ctx,'research.delegate',purpose='document_review',task='逐页检查实际稿件')
         assert value['status']=='completed' and value['advisory'] and value['reviewed_pages']==[1]
         assert value['answer']==answer
-        assert b'data:image/png;base64' not in workspace_path(tmp_path,'.system/graph.sqlite').read_bytes()
+        assert not {'source_version','pdf_sha256'} & value.keys()
+        assert b'data:image/png;base64' not in workspace_path(tmp_path,'.system/agent.sqlite').read_bytes()
         assert (tmp_path/'paper.tex').read_text()==r'\begin{document}Known manuscript\end{document}'
         calls=model.calls
-        cached=await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],
-            task='逐页检查实际稿件',source_version=version,pdf_sha256=pdf_hash)
-        assert cached['answer']==value['answer'] and model.calls==calls
+        repeated=await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],task='逐页检查实际稿件')
+        assert repeated['answer']==value['answer'] and model.calls==calls+3 and len(builds)==1
         (tmp_path/'paper.tex').write_text('changed')
-        stale=await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],
-            task='逐页检查实际稿件',source_version=version,pdf_sha256=pdf_hash)
-        assert not stale['current'] and model.calls==calls
+        revised=await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],task='逐页检查实际稿件')
+        assert revised['status']=='completed' and model.calls==calls+6 and len(builds)==2
+        (tmp_path/'paper.tex').write_text('broken')
+        with pytest.raises(ValueError,match='controlled compile error'):
+            await invoke(ctx,'research.delegate',purpose='document_review',task_id=value['task_id'],task='逐页检查实际稿件')
+        assert model.calls==calls+6, 'a failed current build must not review the previous PDF'
     asyncio.run(run())
 
 
@@ -217,7 +229,7 @@ def test_clarification_has_one_idempotent_writer(tmp_path):
     ctx=context(tmp_path);store=ctx.research
     with store._transaction() as db:
         state=store._read(db)
-        state['action']={'id':'question-1','capability':'ask','status':'waiting','inputs':{'message':'价格单位？'}}
+        state['pending_input']={'id':'question-1','message':'价格单位？'}
         store._save(db,state,'fixture',{})
     first=receive(store,'question-1','元/kWh')
     clock=store.snapshot()['commit_seq']

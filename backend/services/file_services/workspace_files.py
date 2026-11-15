@@ -103,7 +103,7 @@ class WorkspaceFileService:
             # Execution scratch is persisted but surfaced through run provenance.
             if first == 'experiments':
                 continue
-            category = 'attachments' if first == 'attachment' else first if first in result else 'papers'
+            category = 'attachments' if first == 'attachment' else 'data' if first == 'config' else first if first in result else 'papers'
             actual=path
             if relative.startswith('outputs/research/'):
                 from .workspace_fs import WorkspaceFS

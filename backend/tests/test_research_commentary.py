@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from langchain_core.messages import AIMessage
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_system.graph.commentary import ProgressMiddleware, public_progress
+from ai_system.agent.commentary import publish_progress, public_progress
 from helpers.conversation import writer, call, record
 
 
@@ -14,18 +14,18 @@ def test_model_progress_commits_before_tool_and_survives_refresh(tmp_path):
     manager, root, reply, updates = writer(tmp_path)
     class Events:
         async def emit(self, kind, content): reply.block({'type':kind,'content':content})
-    middleware = ProgressMiddleware(Events(), scope='experiment:E1')
+    events=Events()
     response = SimpleNamespace(result=[AIMessage(id='msg-1', content='<progress>I will inspect the data.</progress>',
         tool_calls=[{'name':'read_file','args':{},'id':'tool-1','type':'tool_call'}])])
     async def handler(_): return response
     async def scenario():
-        assert await middleware.awrap_model_call(None, handler) is response
+        await publish_progress(events,response.result[0],scope='experiment:E1')
         # The model wrapper completes before the agent dispatches its tool.
         assert manager.get_messages('work')[0]['items'][0]['text'] == 'I will inspect the data.'
         record(reply,call())
-        await middleware.awrap_model_call(None, handler)
+        await publish_progress(events,response.result[0],scope='experiment:E1')
         response.result = [AIMessage(id='msg-2',content='<progress>The file contains 20 rows.</progress>')]
-        await middleware.awrap_model_call(None,handler)
+        await publish_progress(events,response.result[0],scope='experiment:E1')
         record(reply,call(status='completed',finished_at=2))
         reply.finish('completed')
     asyncio.run(scenario())
@@ -41,7 +41,7 @@ def test_plain_public_messages_are_durable_ordered_and_do_not_change_model_histo
     manager, root, reply, updates = writer(tmp_path)
     class Events:
         async def emit(self, kind, content): reply.block({'type':kind,'content':content})
-    middleware = ProgressMiddleware(Events(), scope='research')
+    events=Events()
     first = AIMessage(id='plain-1', content='先检查附件，再计算。',
         additional_kwargs={'reasoning_content':'private reasoning'},
         tool_calls=[{'name':'read_file','args':{'path':'input.csv'},'id':'read','type':'tool_call'}])
@@ -50,12 +50,12 @@ def test_plain_public_messages_are_durable_ordered_and_do_not_change_model_histo
     response = SimpleNamespace(result=[first])
     async def handler(_): return response
     async def scenario():
-        await middleware.awrap_model_call(None, handler)
+        await publish_progress(events,response.result[0],scope='research')
         record(reply,call('read'))
         record(reply,call('read',status='completed',finished_at=2))
         response.result = [second]
-        await middleware.awrap_model_call(None, handler)
-        await middleware.awrap_model_call(None, handler)
+        await publish_progress(events,response.result[0],scope='research')
+        await publish_progress(events,response.result[0],scope='research')
         record(reply,call('retry'))
         reply.finish('paused')
     asyncio.run(scenario())
@@ -94,7 +94,7 @@ def test_final_answer_replaces_matching_commentary_in_live_updates_and_history(t
 
 def test_real_agent_publishes_plain_text_around_its_tool_call(tmp_path):
     from langchain_core.messages import ToolMessage
-    from ai_system.research.loop import prepare_action
+    from ai_system.research.session import run_research
     from helpers.context import session_context
     from research_tools_helpers import ResearchToolsModel, tool
     from ai_system.agent.context import CURRENT_TURN
@@ -118,7 +118,7 @@ def test_real_agent_publishes_plain_text_around_its_tool_call(tmp_path):
     async def scenario():
         token = CURRENT_TURN.set(reply.turn)
         try:
-            assert await prepare_action(ctx)
+            assert await run_research(ctx)
             reply.finish('paused')
         finally:
             CURRENT_TURN.reset(token)

@@ -64,41 +64,25 @@ def update_question(ctx,inputs):
     return _change(ctx,'question_updated',inputs,edit)
 
 
-def _dispatchable(state):
-    if (state.get('action') or {}).get('status') in {'planned','running','waiting'}:
-        raise ResearchConflict('已有行动等待执行或回应，请先处理该行动再交付')
+async def deliver(ctx,inputs):
+    main=ctx.research.root/('paper.tex' if ctx.output_mode=='latex' else 'paper.md')
+    if not main.is_file() or not main.read_text().strip():
+        raise ValueError('请先用writing_edit保存正文，再交付。')
+    from ai_system.modules.registry import capabilities
+    product=await capabilities().execute('writing.export',{},ctx)
+    return product.value
 
 
-def deliver(ctx,inputs):
+def ask_user(ctx,inputs):return _message(ctx,inputs,'waiting')
+def pause(ctx,inputs):return _message(ctx,inputs,'paused')
+def _message(ctx,inputs,kind):
     def edit(state):
-        _dispatchable(state)
-        main=ctx.research.root/('paper.tex' if state['spec']['output_mode']=='latex' else 'paper.md')
-        if not main.is_file() or not main.read_text(encoding='utf-8').strip():
-            raise ValueError('请先用writing_edit写入完整正文，再交付；系统不会另起模型重写论文。')
-        from .runs import direct_runs
-        pending=[rid for rid,r in direct_runs(ctx.research,ctx.fs).items() if
-                 r.get('delivery_error') or r.get('publication_error')
-                 or r.get('status') in {'starting','running'}]
-        if pending:raise ValueError('已有运行尚未确认执行或交付：'+', '.join(pending)+'；读取回执或恢复文件交付，不要重放代码。')
-        from .loop import _set_action
         from .runtime import execution_links
-        observation_id=execution_links().get('observation_id')
-        state['publication']={'stage':'export','outline':[{'key':'section:'+str(i),'title':title} for i,title in enumerate(re.findall(r'^## (.+)$',main.read_text(encoding='utf-8'),re.M))],'title':inputs['title'],'reason':inputs['reason'],
-            'observation_id':observation_id}
-        action=_set_action(state,'writing.export',{},inputs['reason'],observation_id=observation_id)
-        return {'action_id':action['id'],'reason':inputs['reason']}
-    return _change(ctx,'delivery_requested',inputs,edit)
-
-
-def ask_user(ctx,inputs):return _message(ctx,inputs,'ask')
-def pause(ctx,inputs):return _message(ctx,inputs,'pause')
-def _message(ctx,inputs,name):
-    def edit(state):
-        _dispatchable(state)
-        from .loop import _set_action
-        action=_set_action(state,name,{'message':inputs['message']},inputs['message'])
-        return {'action_id':action['id'],'reason':inputs['message']}
-    return _change(ctx,'action_prepared',inputs,edit)
+        from uuid import uuid4
+        request={'id':execution_links().get('tool_call_id') or uuid4().hex,'message':inputs['message']}
+        state['pending_input']=request if kind=='waiting' else None
+        return {'control':kind,**request}
+    return _change(ctx,'input_requested' if kind=='waiting' else 'pause_requested',inputs,edit)
 
 
 def read_question(ctx,inputs):
@@ -117,7 +101,10 @@ def register(registry):
     from .runtime_tools import register as register_runtime
     register_runtime(registry)
     def register_tool(name,handler,inputs,purpose):
-        async def run(ctx,values):return CapabilityProduct('research_state',handler(ctx,values))
+        async def run(ctx,values):
+            import inspect
+            value=handler(ctx,values)
+            return CapabilityProduct('research_state',await value if inspect.isawaitable(value) else value)
         registry.register('research','research.'+name,'research_state',run,inputs,model_callable=True,purpose=purpose)
     register_tool('update_plan',update_plan,PlanUpdate,PLAN_TOOL_DESCRIPTION)
     register_tool('create_question',update_question,QuestionCreate,'新建一个用户问题，返回系统分配的编号；不接收question_id。可在同轮为多问分别调用。')

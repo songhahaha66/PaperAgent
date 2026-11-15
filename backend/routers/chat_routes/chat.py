@@ -21,8 +21,8 @@ from services.chat_services.chat_service import ChatService
 from services.chat_services.task_manager import task_manager
 from ai_system.config.environment import setup_environment_from_db
 from ai_system.core_managers.stream_manager import StreamOutputManager, SimpleStreamCallback
-from ai_system.graph.agent import PaperGraphAgent
-from ai_system.graph.message_graph import build_message_graph, MessageContext
+from ai_system.agent.agent import PaperAgent
+from ai_system.graph.message_graph import route_message, MessageContext
 from services.chat_services.paper_references import validate_context
 from ai_system.core_handlers.llm_handler import LLMHandler
 from langchain_core.messages import HumanMessage
@@ -436,7 +436,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                         from ai_system.core_handlers.llm_providers import create_llm_from_model_config
                         return create_llm_from_model_config(config) if config else llm_handler.get_llm_instance()
                     code_model = await asyncio.to_thread(load_code_model)
-                    main_agent = PaperGraphAgent(llm_handler.get_llm_instance(), stream_manager,
+                    main_agent = PaperAgent(llm_handler.get_llm_instance(), stream_manager,
                         workspace_dir, work_id, template_id, code_model, output_mode=output_mode,
                         experience_scope=ExperienceScope(user_id, work_id))
                     if action == 'revise_research':
@@ -456,7 +456,7 @@ async def _execute_chat_task(work_id, user_id, problem, action, snapshot,
                                              new_run=action == 'run' and snapshot.has_research)
 
                 requested_action = action
-                await build_message_graph().ainvoke({}, context=MessageContext(
+                await route_message(MessageContext(
                     llm=llm_handler.get_llm_instance(), workspace=workspace_dir, snapshot=snapshot,
                     message=problem, history=history, scope=subproblem_id, requested_action=requested_action,
                     history_manager=chat_service.history_manager, work_id=work_id, turn=turn, execute=execute, paper_context=paper_context))

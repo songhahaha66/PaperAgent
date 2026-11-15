@@ -22,7 +22,7 @@ def candidate(store):
 @pytest.mark.skipif(not shutil.which('pandoc'),reason='pandoc unavailable')
 def test_saved_word_document_opens_and_edits_without_a_graph_checkpoint(paper, offline_compiler):
     store,_=paper
-    checkpoint=workspace_path(store.root, '.system/graph.sqlite')
+    checkpoint=workspace_path(store.root, '.system/agent.sqlite')
     assert not checkpoint.exists()
     before=store.snapshot()
     assert asyncio.run(editor.document(store))['sections']

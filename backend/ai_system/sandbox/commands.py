@@ -75,13 +75,23 @@ def sandbox_operation(function=None, *, input_selector=None):
 
 
 async def run_command(cmd,cwd,stdin=None,timeout=180):
+    if not cmd or cmd[0] not in {'pandoc','xelatex','bibtex'}:raise ValueError('Unsupported compiler command')
+    return await _run_command(cmd,cwd,stdin,timeout)
+
+
+async def run_latex(tex_name,cwd,*,timeout=180):
+    from ai_system.export import latex_worker
+    program=Path(latex_worker.__file__).read_text(encoding='utf-8')
+    return await _run_command(['python3','-c',program,tex_name,str(timeout)],cwd,timeout=timeout*4)
+
+
+async def _run_command(cmd,cwd,stdin=None,timeout=180):
     if _ACTIVE.get() is None:
         @sandbox_operation
-        async def once(root):return await run_command(cmd,root,stdin,timeout)
+        async def once(root):return await _run_command(cmd,root,stdin,timeout)
         return await once(cwd)
     state=_ACTIVE.get();session=state['session'];settings=state['settings'];transfer=state['transfer'];root=state['root']
     if Path(cwd).absolute()!=root:raise ValueError('Compiler cwd changed outside its snapshot')
-    if not cmd or cmd[0] not in {'pandoc','xelatex','bibtex'}:raise ValueError('Unsupported compiler command')
     versions=await transfer.sync_inputs()
     # Receipt identity uses the legacy logical root, independent of the adapter's
     # actual mount point. Otherwise switching roots could bypass an old receipt.

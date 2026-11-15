@@ -195,12 +195,15 @@ class Compiler(RemoteFiles):
     async def exec(self,argv,*,stdin=None,timeout=180):
         self.commands.append((list(argv), stdin))
         markdown=stdin or ''
-        if argv[0]=='xelatex':
+        if argv[0]=='python3':
+            assert argv[1]=='-c' and 'def compile_latex' in argv[2]
             assert (self.remote/'paper.tex').is_file() and (self.remote/'custom.sty').read_text()=='local dependency'
             build=self.remote/'.build/latex';assert build.is_dir(), 'adapter must create remote compiler output directory'
             (build/'paper.log').write_text('Output written on paper.pdf (1 page).\npass '+str(len(self.commands)))
             (build/'paper.aux').write_text('no bibliography')
             (build/'paper.pdf').write_bytes(b'mock PDF delivered by API')
+            (build/'compile.log').write_text('xelatex pass 1, exit 0\nxelatex pass 2, exit 0\n')
+            return 0,json.dumps({'failed_stage':None,'timed_out':False,'log_path':'.build/latex/paper.log'}),''
         elif '--print-default-data-file' in argv:
             target=self.remote/'.build/reference.docx';target.parent.mkdir(parents=True,exist_ok=True)
             doc=Document();doc.add_paragraph('default');doc.save(target)
@@ -240,7 +243,7 @@ def test_latex_compiler_files_cross_api_and_completed_passes_are_not_reexecuted(
         first=await compile_pdf(root)
         assert first.success and (root/'paper.pdf').read_bytes()==b'mock PDF delivered by API'
         session=compiler_factory[0]
-        assert len(session.commands)==3 and 'custom.sty' in session.uploads
+        assert len(session.commands)==1 and 'custom.sty' in session.uploads
         assert 'data/unrelated.csv' not in session.uploads
         assert session.downloads and session.remote!=root
         (session.remote/'.build/latex/paper.pdf').write_bytes(b'changed remote scratch')
@@ -352,6 +355,17 @@ def test_download_and_range_read_the_opened_descriptor_on_this_platform(root):
             assert response.status_code==206 and response.content==b'%PDF'
             assert response.headers['content-range']==f'bytes 0-3/{len(raw)}'
     asyncio.run(run())
+
+
+def test_private_output_metadata_does_not_block_public_result_capture(tmp_path,monkeypatch):
+    from ai_system.sandbox import transfer_worker
+    monkeypatch.setattr(transfer_worker,'ROOT',tmp_path)
+    folder=tmp_path/'outputs';folder.mkdir()
+    (folder/'answer.json').write_text('{"answer":6}')
+    (folder/'manifest.json').write_text('{"internal":true}')
+    result=transfer_worker.freeze('capture-private-name',{},'runtime',1024)
+    assert [row['path'] for row in result['files']]==['outputs/answer.json']
+    assert json.loads((tmp_path/'.pa-runs/capture-private-name/files/outputs/answer.json').read_text())=={'answer':6}
 
 
 def test_provider_uses_real_file_api_adapter_with_separate_sdk_filesystem(root,tmp_path,monkeypatch):

@@ -147,7 +147,7 @@ def test_legacy_and_local_execution_are_closed(tmp_path):
 
 def test_export_allowlist_omits_databases_credentials_and_checkpoints(tmp_path):
     root=tmp_path/'private'/'workspaces'/'old';root.mkdir(parents=True)
-    for name in ('paper.md','code/main.py','attachment/data.csv','.system/graph.sqlite','.env','owner.json','runs/run/input.py'):
+    for name in ('paper.md','code/main.py','attachment/data.csv','.system/agent.sqlite','.env','owner.json','runs/run/input.py'):
         path=root/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(name)
     service=WorkspaceFileService();target=Path(service.export_workspace('old',legacy=True))
     try:

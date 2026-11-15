@@ -7,7 +7,7 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, messages_to_dict
 
 from ai_system.modules.registry import invoke
-from ai_system.research.loop import prepare_action, _act
+from ai_system.research.session import run_research
 from ai_system.research.planner import working_context, decision_context
 from ai_system.research.runtime import execution_scope
 from ai_system.research.store import ResearchStore
@@ -30,7 +30,7 @@ def test_agent_updates_plan_and_continuation_and_public_snapshot_reuse_it(tmp_pa
         assert json.loads(rows[-1].content)['progress_plan']['steps'][1]['status'] == 'in_progress'
         return tool('research_pause', {'message': '等待补充数据'}, 'pause')
     ctx = session_context(tmp_path, ResearchToolsModel(respond=respond))
-    assert asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))
     state = ResearchStore(tmp_path, ctx.research.research_id).snapshot()
     plan = state['progress_plan']
     assert working_context(ctx)['progress_plan'] == plan
@@ -89,12 +89,10 @@ def test_export_failure_and_retry_update_only_explicit_delivery_item(tmp_path):
             if not broken:
                 (tmp_path / 'paper.md').write_text('# 报告\n已有结果；补充分析尚未完成。')
             await invoke(ctx, 'research.deliver')
-            action = ctx.research.snapshot()['action']
-            await _act({'action_id': action['id']}, SimpleNamespace(context=ctx))
             plan = ctx.research.snapshot()['progress_plan']
             assert plan['steps'][0]['status'] == 'pending'
             assert plan['steps'][-1]['status'] == ('blocked' if broken else 'completed')
-        assert ctx.research.snapshot()['outcome'] == 'completed'
+        assert ctx.research.snapshot()['outcome'] != 'completed', 'export alone does not finish the request'
     asyncio.run(scenario())
 
 
@@ -104,15 +102,18 @@ def test_stale_plan_reminder_counts_tools_in_parallel_batches_and_resets_only_on
     changed[1]['status'] = 'completed'
     changed[2]['status'] = 'in_progress'
     seen = []
+    prompts=[]
 
     def respond(messages):
         rows = [message for message in messages if isinstance(message, ToolMessage)]
         reminders = [message for message in messages if message.additional_kwargs.get('plan_reminder')]
         seen.append(len(rows))
-        if len(rows) in {11, 12}:
-            assert reminders == [messages[-1]]
-            assert '计划可能已过期' in messages[-1].content
-            assert json.loads(messages[-1].content.split('当前计划：', 1)[1].split('\n', 1)[0]) == ctx.research.snapshot()['progress_plan']['steps']
+        prompts.append(messages_to_dict(messages))
+        if len(rows)>=11:
+            assert len(reminders)==1 and '计划可能已过期' in reminders[0].content
+            if len(rows)==11:assert reminders==[messages[-1]]
+            if len(rows)<13:
+                assert json.loads(reminders[0].content.split('当前计划：',1)[1].split('\n',1)[0])==ctx.research.snapshot()['progress_plan']['steps']
         else:
             assert not reminders
         if not rows:
@@ -133,14 +134,15 @@ def test_stale_plan_reminder_counts_tools_in_parallel_batches_and_resets_only_on
 
     model = ResearchToolsModel(respond=respond)
     ctx = session_context(tmp_path, model)
-    assert asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))
     assert seen == [0, 1, 10, 11, 12, 13] and model.calls == 6
     transcript = next(workspace_path(tmp_path, '.system/transcripts').glob('*.json')).read_text()
-    assert 'plan_reminder' not in transcript and '计划可能已过期' not in transcript
+    assert transcript.count('计划可能已过期')==1
+    assert all(following[:len(previous)]==previous for previous,following in zip(prompts,prompts[1:]))
 
 
-def test_plan_reminder_survives_context_compaction_and_unchanged_update_clears_it(tmp_path):
-    from ai_system.graph.compaction import ContextMiddleware
+def test_plan_reminder_is_durable_across_compaction_and_new_plan_follows_it(tmp_path):
+    from ai_system.agent.prompt import ContextManager
     from ai_system.research.plan import plan_reminder
     from helpers.context import ContextRequest
 
@@ -158,14 +160,15 @@ def test_plan_reminder_survives_context_compaction_and_unchanged_update_clears_i
     async def handle(request):
         sent.append(request.messages)
     async def project():
-        return await ContextMiddleware(ctx, model, 'plan-reminder', pinned={},
-            tail=lambda messages: plan_reminder(ctx, messages)).awrap_model_call(ContextRequest(history), handle)
+        manager=ContextManager(ctx,model,'plan-reminder',pinned={},tail=lambda messages:plan_reminder(ctx,messages))
+        history.extend(manager.notes(history))
+        return await manager.call(ContextRequest(history),handle)
     asyncio.run(project())
     with ctx.research._connect() as db:
         saved = json.loads(db.execute('SELECT response FROM commands WHERE id=?', ('context:plan-reminder',)).fetchone()[0])
     assert saved['cut'] > 2 and sent[-1][-1].additional_kwargs['plan_reminder']
     assert '10 次工具调用' in sent[-1][-1].content
-    assert messages_to_dict(history) == original
+    assert messages_to_dict(history[:len(original)])==original and len(history)==len(original)+1
     calls = model.calls
     # A new middleware instance reuses the checkpoint and counts original history.
     asyncio.run(project())
@@ -175,5 +178,6 @@ def test_plan_reminder_survives_context_compaction_and_unchanged_update_clears_i
     history.extend([tool('research_update_plan', {'steps': STEPS}, 'refresh'),
                     ToolMessage(json.dumps(refreshed), tool_call_id='refresh', name='research_update_plan')])
     asyncio.run(project())
-    assert not any(message.additional_kwargs.get('plan_reminder') for message in sent[-1])
+    assert len([message for message in history if message.additional_kwargs.get('plan_reminder')])==1
+    assert sent[-1][-1].name=='research_update_plan'
     assert model.calls == calls

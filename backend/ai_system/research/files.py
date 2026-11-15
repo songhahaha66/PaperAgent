@@ -6,6 +6,7 @@ import re
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import Literal
 from pydantic import Field
 from ai_system.modules.registry import Inputs, CapabilityProduct
 
@@ -75,6 +76,9 @@ class ReadFile(Inputs):
     path: str
     start: int = Field(default=0,ge=0)
     limit: int = Field(default=12000,ge=1,le=24000)
+    view: Literal['text','structure'] = Field(default='text',description='JSON 用 structure 查看字段、类型和数组样例；text 读取原文或选中字段的值。')
+    json_pointer: str | None = Field(default=None,description='JSON 字段路径，如 /checks 或 /q2/0/optimum；空字符串表示根节点。字段名中的 / 和 ~ 分别写作 ~1 和 ~0。')
+    pages: list[int] = Field(default_factory=list,max_length=4,description='PDF需看图表时指定页码，从1开始，每次最多4页；直接返回实际页图，无需在计算沙箱安装解析库。')
 
 
 class ListFiles(Inputs):
@@ -113,13 +117,28 @@ async def materialize_artifact(ctx,inputs):
 
 
 async def read_artifact(ctx, inputs):
-    view=read_view(ctx)
-    path=await asyncio.to_thread(resolve,view,inputs['path'])
+    frozen=read_view(ctx)
+    path=await asyncio.to_thread(resolve,frozen,inputs['path'])
     version,text=await asyncio.to_thread(text_file,path)
+    view=inputs.get('view','text');pointer=inputs.get('json_pointer')
+    if view=='structure' or pointer is not None:
+        if path.suffix.lower()!='.json':raise ValueError('结构预览和 json_pointer 仅用于 JSON 文件')
+        from .json_views import render
+        text=await asyncio.to_thread(render,text,pointer or '',view)
     start=inputs['start'];end=start+inputs['limit']
-    return CapabilityProduct('research_state',{'path':inputs['path'],'version':version,'total_chars':len(text),
+    result={'path':inputs['path'],'version':version,'total_chars':len(text),
         'excerpt':text[start:end],'next_start':end if end<len(text) else None,'read_tool':'research_read_artifact',
-        'location':'工作区文件；Python计算沙箱不保证有此文件的副本'})
+        'location':'工作区文件；Python计算沙箱不保证有此文件的副本'}
+    if view=='structure' or pointer is not None:
+        result.update(view=view,json_pointer=pointer or '')
+    if inputs.get('pages'):
+        if path.suffix.lower()!='.pdf':raise ValueError('pages仅用于PDF文件')
+        from ai_system.graph.pdf_pages import render_pdf_pages
+        from ai_system.sandbox.content_store import ContentStore
+        content=ContentStore(ctx.workspace,20_000_000)
+        await asyncio.to_thread(content.put,path,version)
+        result.update(await asyncio.to_thread(render_pdf_pages,ctx.workspace,content.path(version),version,inputs['pages']))
+    return CapabilityProduct('research_state',result)
 
 
 async def list_files(ctx, inputs):
@@ -159,7 +178,7 @@ def register(registry):
     registry.register('research','research.materialize_artifact','research_state',materialize_artifact,MaterializeFile,
         model_callable=True,purpose='将已有归档结果按固定版本复制为下一次Python可读取的输入，不重算，不覆盖原始资料或其他版本。')
     for name,handler,schema,purpose in (
-        ('read_artifact',read_artifact,ReadFile,'分页读取工作区原始资料、正文、代码、结果和运行日志，返回内容与版本；不需要进入Python或重新计算。'),
+        ('read_artifact',read_artifact,ReadFile,'读取工作区材料、正文、代码与结果。JSON先用view=structure查看字段，再用json_pointer精确取值，start/limit继续分页；PDF用pages看实际页图。返回实际内容和文件版本，无需进入Python。'),
         ('list_files',list_files,ListFiles,'按glob分页列出工作区文件、版本和可用性；正文也在这里，Python沙箱不是文件列表的来源。'),
         ('search_files',search_files,SearchFiles,'按字面文本搜索工作区文件，返回匹配片段、版本与读取位置；pattern限定目录，offset继续下一页。')):
         registry.register('research','research.'+name,'research_state',handler,schema,model_callable=True,purpose=purpose,access='read')

@@ -164,35 +164,37 @@ def test_parallel_calls_keep_their_own_context_and_run(tmp_path):
     assert {(r['label'],r['run_id']) for r in rows} == {(f'计算{i}',r['run_id']) for i,r in enumerate(results)}
 
 
-@pytest.mark.parametrize('mode', ['compile', 'cached', 'historical', 'failed'])
+@pytest.mark.parametrize('mode', ['compile', 'cached', 'failed'])
 def test_pdf_preview_metadata_survives_stream_and_history_without_page_payloads(tmp_path, monkeypatch, mode):
     from unittest.mock import AsyncMock
     from ai_system.modules.writing import document
     ctx, history, reply, updates = conversation(tmp_path)
     version, pdf_hash = 'a' * 64, 'b' * 64
     warning = 'Overfull box at /private/build/paper.tex; api_key=secret-value'
-    build = {'pdf_version': version, 'pdf_sha256': pdf_hash,
-             'compile': {'success': mode != 'failed', 'state': 'current', 'warnings': [warning]}}
-    monkeypatch.setattr(document.project, 'snapshot', lambda _: {'main': 'paper.tex', 'version': version})
-    monkeypatch.setattr(document.project, 'meta', lambda _: build if mode in {'cached', 'historical'} else {})
-    compiler = AsyncMock(return_value=build)
+    build = {'pdf_version': version, 'pdf_sha256': pdf_hash,'compiled':mode in {'compile','failed'},
+             'compile': {'success': mode != 'failed', 'state': 'current', 'warnings': [warning],'source_version':version}}
+    async def compile_result(store,*,on_compile=None):
+        if build['compiled'] and on_compile:on_compile()
+        return build
+    compiler = AsyncMock(side_effect=compile_result)
     monkeypatch.setattr(document.project, 'compile_project', compiler)
     rendered = []
     def render(*args):
         rendered.append(args)
         return {'pages': [{'page': p, 'text': 'PRIVATE PAGE TEXT'} for p in args[-1]],
-                'total_pages': 17, 'pdf_sha256': pdf_hash, 'warnings': [warning],
+                'total_pages': 17, 'warnings': [warning],
                 '_images': [{'path': 'PRIVATE IMAGE REFERENCE'}]}
     monkeypatch.setattr(document, 'render_pages', render)
     async def run():
         token = CURRENT_TURN.set(reply.turn)
         try:
-            await invoke(ctx, 'writing.preview', pages=[6, 7, 8, 9],
-                         **({'source_version': version, 'pdf_sha256': pdf_hash} if mode == 'historical' else {}))
+            value=await invoke(ctx, 'writing.preview', pages=[6, 7, 8, 9])
+            assert not {'source_version','pdf_sha256'} & value.keys()
+            if mode=='failed':assert 'source_version' not in value['compile']
             reply.finish('completed')
         finally:CURRENT_TURN.reset(token)
     asyncio.run(run())
-    assert compiler.await_count == (1 if mode in {'compile', 'failed'} else 0)
+    assert compiler.await_count == 1
     activities = ctx.research.snapshot()['items']
     assert len(activities) == 1
     assert 'PRIVATE' not in str(activities)
@@ -207,7 +209,6 @@ def test_pdf_preview_metadata_survives_stream_and_history_without_page_payloads(
         assert not rendered and '共 17 页' not in row['detail'] and row['message']
     else:
         assert '共 17 页' in row['detail'] and '1 条编译警告' in row['detail']
-    if mode == 'historical':assert '历史版本' in row['detail']
     streamed = [u['event']['item'] for u in updates if u['event'].get('item',{}).get('type') in TOOL_TYPES]
     assert {s['id'] for s in streamed} == {row['id']}
     if mode in {'compile', 'failed'}:assert any('正在编译 LaTeX' in s['detail'] for s in streamed)

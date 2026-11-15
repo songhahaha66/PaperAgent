@@ -122,26 +122,27 @@ def test_runtime_generation_allocation_is_used_in_actual_wire_request(tmp_path):
 
 
 def test_truncated_valid_tool_call_never_executes_in_real_graph(tmp_path):
-    from ai_system.graph.agent import PaperGraphAgent
+    from ai_system.agent.agent import PaperAgent
     calls=[]
     def handle(request):
         calls.append(1);raw=response('length',16000)
         raw['choices'][0]['message']={'role':'assistant','content':'','tool_calls':[{'id':'partial', 'type':'function',
             'function':{'name':'research_run_python','arguments':json.dumps({'code':"print('must not run')"})}}]}
         return httpx.Response(200,json=raw)
-    agent=PaperGraphAgent(client(handle),workspace_dir=str(tmp_path))
+    agent=PaperAgent(client(handle),workspace_dir=str(tmp_path))
     asyncio.run(agent.run('计算并保存一份结果。'))
     state=ResearchStore(tmp_path,agent._load_thread()).snapshot()
     from services.file_services.workspace_fs import WorkspaceFS
     assert not WorkspaceFS(str(tmp_path))._manifest.get('runs')
-    assert len(calls)==1 and state['action']['error_type']=='ModelGenerationLimit'
-    assert '截断' in state['action']['message'] and state['outcome']!='completed'
+    from ai_system.agent.store import AgentStore
+    assert len(calls)==1 and AgentStore(tmp_path).session(agent._load_thread()+'-lead')['reason']=='ModelGenerationLimit'
+    assert '截断' in state['last_error'] and state['outcome']!='completed'
 
 
 @pytest.mark.parametrize('request_limit,prepared',[(10,8),(6,4)])
 def test_original_agent_receives_wrapup_once_as_preserved_message(tmp_path,request_limit,prepared):
     from ai_system.graph.context import GraphContext
-    from ai_system.research.loop import prepare_action
+    from ai_system.research.session import run_research
     from research_tools_helpers import ResearchToolsModel,tool
     seen=[];meter=ResearchRuntime(tmp_path);meter.configure({'request_limit':request_limit})
     for _ in range(prepared):
@@ -152,7 +153,7 @@ def test_original_agent_receives_wrapup_once_as_preserved_message(tmp_path,reque
     ctx=GraphContext.create(str(tmp_path),planner_llm=ResearchToolsModel(respond=respond));ctx.research=ResearchStore(tmp_path,'wrapup')
     ctx.research.initialize('读取材料并完成分析。')
     async def run():
-        with budget_scope(tmp_path,'wrapup'):await prepare_action(ctx)
+        with budget_scope(tmp_path,'wrapup'):await run_research(ctx)
     asyncio.run(run())
     assert len(seen)==2
     notes=[[m for m in rows if (m.id or '').startswith('budget-wrapup:')] for rows in seen]

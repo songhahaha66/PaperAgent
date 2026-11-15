@@ -89,6 +89,9 @@ def test_metadata_marks_research_and_run_sandboxes():
     research = sandbox_metadata(work_id='proj-1', experiment_id='research', cache_key='abc')
     assert research == {'application': 'paperagent', 'role': 'research', 'cache_key': 'abc', 'work_id': 'proj-1'}
     compiler = sandbox_metadata(work_id=None, experiment_id='compiler', cache_key='def')
+    evaluation = sandbox_metadata(work_id=None, experiment_id='research', cache_key='eval',application='paperagent-eval')
+    assert evaluation['application']=='paperagent-eval'
+    assert decide(SandboxView('eval',metadata=evaluation,created_at=0),projects={},activity={},now=100000,ttl=1) is None
     assert compiler['role'] == 'run' and 'work_id' not in compiler
 
 

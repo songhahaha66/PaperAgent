@@ -8,7 +8,6 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, TypedDict
 
-from langgraph.graph import START, END, StateGraph
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .llm_utils import as_messages, call_structured
@@ -118,8 +117,7 @@ class MessageContext:
     paper_context: dict | None = None
 
 
-async def classify_intent(state, runtime):
-    ctx = runtime.context
+async def classify_intent(ctx):
     cached = ctx.turn.get('metadata', {}).get('routing')
     if cached:
         if cached['research_id'] != ctx.snapshot.research_id:
@@ -148,16 +146,7 @@ async def classify_intent(state, runtime):
     return {'route': route}
 
 
-async def dispatch_message(state, runtime):
-    await runtime.context.execute(state['route'])
-    return {}
-
-
-def build_message_graph():
-    graph = StateGraph(MessageState, context_schema=MessageContext)
-    graph.add_node('classify_intent', classify_intent)
-    graph.add_node('dispatch', dispatch_message)
-    graph.add_edge(START, 'classify_intent')
-    graph.add_edge('classify_intent', 'dispatch')
-    graph.add_edge('dispatch', END)
-    return graph.compile()
+async def route_message(ctx):
+    result=await classify_intent(ctx)
+    await ctx.execute(result['route'])
+    return result

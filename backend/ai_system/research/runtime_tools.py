@@ -17,9 +17,13 @@ async def reset(ctx,inputs):
 
 async def inspect(ctx,inputs):
     from services.file_services.workspace_layout import private_root
+    from ai_system.sandbox.settings import SandboxSettings
+    settings=SandboxSettings.from_env()
     folder=private_root(ctx.workspace)/'.system/runtimes'
     rows=[json.loads(p.read_text()) for p in sorted(folder.glob('*.json'))] if folder.exists() else []
-    return CapabilityProduct('research_state',{'runtimes':rows,'note':'持久记录，未发起执行；不把未确认状态视为已销毁。'})
+    return CapabilityProduct('research_state',{'runtimes':rows,
+        'resources':{'cpu':settings.cpu,'memory':settings.memory,'image':settings.image},
+        'note':'配置资源与持久记录；执行后的environment包含实际限额和库版本。'})
 
 
 def register(registry):

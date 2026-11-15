@@ -10,8 +10,8 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import pytest
 from langchain_core.messages import ToolMessage,HumanMessage,AIMessage
 from ai_system.graph.context import KernelPool,GraphContext
-from ai_system.graph.images import ImageProjection,page_ref,vision_policy
-from ai_system.graph.compaction import ContextMiddleware,token_estimate
+from ai_system.agent.images import ImageProjection,page_ref,vision_policy
+from ai_system.agent.prompt import ContextManager,token_estimate
 from ai_system.research.store import ResearchStore
 from services.file_services.workspace_layout import workspace_path
 
@@ -89,7 +89,7 @@ def test_inline_byte_limit_and_hash_verification(tmp_path):
 
 def test_image_budget_reserves_one_fixed_bound_per_page(tmp_path):
     from ai_system.core_handlers.model_runtime import reservation
-    from ai_system.graph.images import PAGE_IMAGE_TOKENS
+    from ai_system.agent.images import PAGE_IMAGE_TOKENS
     pages=[receipt(page(tmp_path,number),str(number)) for number in (1,2,3)]
     terra=SimpleNamespace(model_name='gpt-6.1-terra',openai_api_base='https://gateway.example/v1')
     media=ImageProjection(tmp_path,terra,{})
@@ -121,8 +121,8 @@ def _preview_turn(tmp_path):
 
 
 def test_unsupported_image_error_strips_images_once_and_disables_the_switch(tmp_path,monkeypatch):
-    from langchain.agents.middleware import ModelResponse
-    from ai_system.graph.images import IMAGE_UNSUPPORTED_NOTE
+    from types import SimpleNamespace as ModelResponse
+    from ai_system.agent.images import IMAGE_UNSUPPORTED_NOTE
     from ai_system.research.runtime import ModelServiceError
     saved=[]
     monkeypatch.setattr('ai_system.config.generation.disable_saved_image_inputs',lambda config_id:saved.append(config_id) or True)
@@ -144,9 +144,9 @@ def test_unsupported_image_error_strips_images_once_and_disables_the_switch(tmp_
         metadata={'generation_settings':{},'model_config_id':7},profile={'max_input_tokens':100000})
     ctx=GraphContext.create(str(tmp_path),planner_llm=model)
     ctx.research=ResearchStore(tmp_path,'images');ctx.research.initialize('check page')
-    middleware=ContextMiddleware(ctx,model,'images',pinned={})
+    middleware=ContextManager(ctx,model,'images',pinned={})
     messages,Request=_preview_turn(tmp_path)
-    result=asyncio.run(middleware.awrap_model_call(Request(messages),handler))
+    result=asyncio.run(middleware.call(Request(messages),handler))
     assert len(calls)==2 and saved==[7]
     assert model.metadata['generation_settings']['image_inputs'] is False
     assert vision_policy(model).disabled_reason==IMAGE_UNSUPPORTED_NOTE
@@ -169,14 +169,14 @@ def test_unrelated_model_errors_do_not_drop_images_or_retry(tmp_path,error):
         metadata={'generation_settings':{},'model_config_id':9},profile={'max_input_tokens':100000})
     ctx=GraphContext.create(str(tmp_path),planner_llm=model)
     ctx.research=ResearchStore(tmp_path,'images');ctx.research.initialize('check page')
-    middleware=ContextMiddleware(ctx,model,'images',pinned={})
-    with pytest.raises(Exception):asyncio.run(middleware.awrap_model_call(Request(messages),handler))
+    middleware=ContextManager(ctx,model,'images',pinned={})
+    with pytest.raises(Exception):asyncio.run(middleware.call(Request(messages),handler))
     assert len(calls)==1 and model.metadata['generation_settings'].get('image_inputs') is not False
 
 
 def test_actual_input_usage_calibrates_same_prefix_but_not_a_different_route(tmp_path,monkeypatch):
     from contextlib import contextmanager
-    from langchain.agents.middleware import ModelResponse
+    from types import SimpleNamespace as ModelResponse
     from ai_system.research import runtime
     stats=[]
     @contextmanager
@@ -187,7 +187,7 @@ def test_actual_input_usage_calibrates_same_prefix_but_not_a_different_route(tmp
     model=deepseek();model.profile={'max_input_tokens':100000}
     ctx=GraphContext.create(str(tmp_path),planner_llm=model)
     ctx.research=ResearchStore(tmp_path,'usage');ctx.research.initialize('check image usage')
-    middleware=ContextMiddleware(ctx,model,'usage',pinned={})
+    middleware=ContextManager(ctx,model,'usage',pinned={})
     class Request:
         tools=[]
         def __init__(self,messages):self.messages=messages
@@ -197,11 +197,11 @@ def test_actual_input_usage_calibrates_same_prefix_but_not_a_different_route(tmp
     async def run():
         messages=[HumanMessage(content='Check page'),AIMessage(content='',tool_calls=[
             {'name':'writing_preview','args':{},'id':'one'}]),receipt(page(tmp_path),'one')]
-        await middleware.awrap_model_call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
         messages += [reply,HumanMessage(content='Now explain it')]
-        await middleware.awrap_model_call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
         model.metadata={'generation_settings':{'image_inputs':False}}
-        await middleware.awrap_model_call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
     asyncio.run(run())
     assert stats[0]['images_attached']==1 and stats[0]['images_absent_reason'] is None
     assert stats[0]['total_estimated_tokens']<10000
@@ -234,12 +234,12 @@ def test_pdf_projection_reaches_real_sdk_and_budget_via_mock_http(tmp_path):
                 profile={'max_input_tokens':100000})
             ctx=GraphContext.create(str(tmp_path),planner_llm=model)
             ctx.research=ResearchStore(tmp_path,'sdk');ctx.research.initialize('check page')
-            middleware=ContextMiddleware(ctx,model,'sdk',pinned={})
+            middleware=ContextManager(ctx,model,'sdk',pinned={})
             messages=[HumanMessage('check'),AIMessage(content='',tool_calls=[
                 {'name':'writing_preview','args':{},'id':'one'}]),receipt(page(tmp_path),'one')]
             async def handler(request):return await model.ainvoke(request.messages)
             with budget_scope(tmp_path,'sdk'):
-                result=await middleware.awrap_model_call(Request(messages),handler)
+                result=await middleware.call(Request(messages),handler)
             assert result.content=='page checked'
             assert 'base64' not in str(ctx.agent_messages)
     asyncio.run(run())
@@ -254,7 +254,7 @@ def test_text_offload_preserves_active_images_and_retained_read_handles(tmp_path
     value=json.loads(message.content);value['pages'][0]['text']='many words '*8000
     message=message.model_copy(update={'content':json.dumps(value)})
     ctx=GraphContext.create(str(tmp_path),planner_llm=None)
-    middleware=ContextMiddleware(ctx,deepseek(),'images')
+    middleware=ContextManager(ctx,deepseek(),'images')
     short=middleware.offload(message)
     assert json.loads(short.content)['_images']==value['_images']
     old=middleware.offload(message,old=True)

@@ -15,7 +15,7 @@ LABELS = {'experience.candidates':'更新经验索引','experience.search':'查�
     'writing.save_source':'保存论文源码','writing.compile':'编译 PDF','research.update_question':'更新研究问题','research.create_question':'建立研究问题','research.edit_question':'修改研究问题','research.schedule_experiment':'安排实验',
     'research.continue_experiment':'继续实验','research.read_question':'读取问题与依据',
     'research.deliver':'交付研究','research.ask_user':'请求必要信息','research.pause':'暂停研究','research.tool_error':'工具调用失败',
-    'research.run_python':'运行研究代码','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
+    'research.run_python':'运行研究代码','research.run_file':'运行代码入口','workspace.edit':'编辑计算文件','research.observe':'研究计算与分析','experiments.inspect':'查看输入材料','experiments.execute':'执行实验',
     'research.revise_interpretation':'修订实验解释','research.check_interpretation':'核查实验解释','research.read_artifact':'读取已有文件','literature.collect':'获取文献证据',
     'literature.search':'搜索研究文献','literature.verify':'核查文献引用','literature.import':'导入文献来源',
     'writing.edit':'编辑研究正文','research.delegate':'执行独立子任务',
@@ -288,7 +288,6 @@ def completed_work_status(root):
     state = ResearchStore(root, research_id, read_only=True).snapshot() or {}
     if state.get('outcome') == 'completed':
         return 'completed'
-    action = state.get('action') or {}
-    if action.get('capability') == 'ask' and action.get('status') == 'waiting':
+    if state.get('pending_input'):
         return 'waiting'
     return 'paused'

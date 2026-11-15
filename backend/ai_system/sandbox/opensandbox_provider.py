@@ -156,7 +156,8 @@ class OpenSandboxSession:
             resource={"cpu": self.settings.cpu, "memory": self.settings.memory},
             network_policy=NetworkPolicy(default_action="deny"),
             volumes=[Volume(name='execution-cache', host=Host(path=self.volume_path), mount_path='/workspace')],
-            metadata=sandbox_metadata(work_id=self.work_id, experiment_id=self.experiment_id, cache_key=self.cache_key),
+            metadata=sandbox_metadata(work_id=self.work_id, experiment_id=self.experiment_id,
+                                      cache_key=self.cache_key, application=self.settings.application),
             env={"PYTHON_VERSION": "3.11", "MPLBACKEND": "Agg", "OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
         self.host.sandbox = self.sandbox
         lease['sandbox_id'] = self.sandbox.id
@@ -190,12 +191,15 @@ class OpenSandboxSession:
         request = {'op':op,'limit':self.settings.max_file_bytes,**values}
         code, out, err = await self.command('python3 /tmp/paperagent_transfer.py ' + shlex.quote(json.dumps(request)),60,
                                           max_output_bytes=max(self.settings.max_log_bytes, 1024 * 1024))
-        if code!=0: raise RuntimeError('沙箱文件操作失败：'+err[:1000])
+        if code!=0: raise RuntimeError('沙箱文件操作失败：'+err[-1000:])
         return json.loads(out)
 
     async def inventory(self, paths=None, *, kind='python'):
         if paths is not None: paths=[self._relative(p) for p in paths]
         return await self._rpc('inventory',paths=paths,kind=kind)
+
+    async def prepare_inputs(self, paths):
+        return await self._rpc('prepare',paths=[self._relative(path) for path in paths])
 
     async def upload(self, path, source, sha256):
         from opensandbox.models import WriteEntry
@@ -371,12 +375,14 @@ class OpenSandboxSession:
             'decoders': {name: codecs.getincrementaldecoder('utf-8')(errors='replace')
                          for name in ('stdout', 'stderr')}, 'flushed': False})
 
-    async def poll(self, run_id, output):
+    async def poll(self, run_id, output, *, runtime_gone=False):
         import base64
         cursor = self._cursor(run_id)
         try:
             value = await self._job_rpc('status', run_id, cursor['offsets'])
         except Exception as exc:
+            from .lifetime import confirmed_sandbox_loss
+            if confirmed_sandbox_loss(exc):raise
             raise JobStatusUnavailable('任务状态读取失败，稍后查询原任务') from exc
         for channel in ('stdout', 'stderr'):
             row = value['logs'][channel]
@@ -391,7 +397,7 @@ class OpenSandboxSession:
         done = value.get('done')
         drained = all(row['offset'] == row['size'] for row in value['logs'].values())
         cursor['backlog'] = not drained
-        lost = done is None and (value.get('lost') is True or value.get('alive') is False)
+        lost = done is None and (runtime_gone or value.get('lost') is True or value.get('alive') is False)
         if (done is None and not lost) or not drained:
             return None
         if not cursor['flushed']:
@@ -412,13 +418,14 @@ class OpenSandboxSession:
         return ExecutionOutcome(error=error, exit_code=done['exit_code'],
                                 duration_seconds=done['duration_seconds'], stop_reason=reason, receipt=done)
 
-    async def _follow(self, run_id, output, *, renew=True):
+    async def _follow(self, run_id, output, *, renew=True, runtime_gone=False):
         holder = asyncio.create_task(self._sustain(self.settings.max_timeout)) if renew else None
         try:
             while True:
                 read_failed = False
                 try:
-                    outcome = await asyncio.wait_for(self.poll(run_id, output), 12)
+                    poll = self.poll(run_id, output, runtime_gone=True) if runtime_gone else self.poll(run_id, output)
+                    outcome = await asyncio.wait_for(poll, 12)
                 except (JobStatusUnavailable, asyncio.TimeoutError):
                     # Only retry reads. A dropped status message cannot replay code.
                     outcome = None
@@ -441,7 +448,7 @@ class OpenSandboxSession:
         await self.submit(code, run_id, timeout=timeout)
         return await self._follow(run_id, output)
 
-    async def recover(self, run_id, output, *, renew=True):
+    async def recover(self, run_id, output, *, renew=True, previous_runtime_id=None):
         # Resume an existing disk-backed job after client/backend disconnection.
         self._job_cursors.pop(run_id, None)
         self.active_job = run_id
@@ -449,7 +456,11 @@ class OpenSandboxSession:
         previous = getattr(self, 'automatic_renewal', True)
         self.automatic_renewal = previous and renew
         try:
-            return await self._follow(run_id, output, renew=renew)
+            # A replaced container cannot still be executing the original job.
+            # Drain retained logs and use done.json if present; otherwise report
+            # loss without waiting for a supervisor that can no longer start.
+            gone = previous_runtime_id is not None and previous_runtime_id != self.id
+            return await self._follow(run_id, output, renew=renew, runtime_gone=gone)
         finally:
             self.automatic_renewal = previous
 

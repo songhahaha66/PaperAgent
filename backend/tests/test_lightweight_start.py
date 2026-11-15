@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 
 from ai_system.graph.context import GraphContext
-from ai_system.graph.build import compile_graph
-from ai_system.research import control, loop, planner
+from ai_system.research import control, session, planner
 from ai_system.research.store import ResearchStore
 
 SOURCE = '计算需求。容量最多10；保留完整数据和代码，中文报告。'
@@ -30,8 +29,6 @@ def test_start_persists_source_materials_and_output_without_a_plan(tmp_path):
     assert ctx.research.initialize('do not replace source') == snapshot
     public = control.public_snapshot(snapshot)
     assert public['requirements'][0]['status'] == 'pending' and public['delivery_summary']['state']=='pending'
-    nodes = compile_graph().get_graph().nodes
-    assert 'observe' in nodes and 'analyze' not in nodes
     from ai_system.modules.registry import capabilities
     assert 'experiments.analyze' not in {c['name'] for c in capabilities().describe()}
 
@@ -44,14 +41,17 @@ def test_first_observe_can_inspect_without_tasks_or_extra_model_calls(tmp_path, 
         assert 'artifacts' not in context  # Values are carried once in scoped experiments.
         from ai_system.modules.registry import invoke
         await invoke(ctx,'experiments.inspect')
-        await invoke(ctx,'research.pause',message='Only inspect materials in this test')
+        result=await invoke(ctx,'research.pause',message='Only inspect materials in this test')
+        import json
+        from langchain_core.messages import ToolMessage
+        return {'status':'paused','messages':[ToolMessage(content=json.dumps(result),tool_call_id='pause')]}
+
     monkeypatch.setattr(planner.Planner, 'run', decide)
     ctx.research.initialize(SOURCE)
-    state = asyncio.run(control.observe({}, SimpleNamespace(context=ctx)))
-    action = loop.select(state, SimpleNamespace(context=ctx))
+    state = asyncio.run(session.run_research(ctx))
     assert any(a.get('tool_name')=='experiments.inspect' for a in ctx.research.snapshot()['items'])
     assert len(calls) == 1 and not ctx.research.snapshot()['experiments']
-    assert state == {'research_blocked': True}  # The fixture explicitly paused after inspection.
+    assert state['status']=='paused'  # The fixture explicitly paused after inspection.
     view = control.graph_view(ctx.research.snapshot())
     assert view['analysis']['subproblems'] == [] and view['analysis']['restatement'] == SOURCE
     assert view['data_profile'] == ctx.research.snapshot()['materials']['profile']

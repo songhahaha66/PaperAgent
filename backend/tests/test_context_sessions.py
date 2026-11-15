@@ -68,7 +68,7 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     def child(messages):
         seen.append(messages)
         rows=[m for m in messages if isinstance(m,ToolMessage)]
-        if not rows:return tool('run_python',{'code':"from pathlib import Path\nassert Path('attachment/assigned.txt').read_text()=='6'\nassert not Path('attachment/unassigned.txt').exists()\nPath('outputs/result.txt').write_text('12')\nprint(12)"},'child-code')
+        if not rows:return tool('run_python',{'code':"from pathlib import Path\nassert Path('attachment/assigned.txt').read_text()=='6'\nassert Path('config/parameters.json').read_text()=='{\"factor\":2}'\nassert not Path('attachment/unassigned.txt').exists()\nPath('outputs/result.txt').write_text('12')\nprint(12)"},'child-code')
         if len(rows)==1:return tool('read_file',{'path':'outputs/result.txt'},'read-result')
         assert '12' in rows[1].content and rows[1].status=='success'
         return AIMessage(content=[
@@ -78,9 +78,10 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     model=ResearchToolsModel(respond=child);ctx=context(tmp_path,model)
     folder=tmp_path/'attachment';folder.mkdir(exist_ok=True)
     (folder/'assigned.txt').write_text('6');(folder/'unassigned.txt').write_text('not assigned')
+    ctx.fs.write_text('config/parameters.json','{"factor":2}')
     ctx.agent_messages=[HumanMessage(content='parent-context-marker')]
     async def run():
-        result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt'])
+        result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt','config/parameters.json'])
         assert result['status']=='completed' and len(result['run_ids'])==1
         assert result['answer']==answer
         items=ctx.research.snapshot()['items']
@@ -108,14 +109,14 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
 
 
 def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp_path):
-    from ai_system.graph.compaction import ContextMiddleware
+    from ai_system.agent.prompt import ContextManager
     prompts=[]
     def summarize(messages):
         prompts.append(messages)
         assert 'private-reasoning-marker' not in str(messages)
         return AIMessage(content=json.dumps({'notes':['效率0.95；修正了递推实现。']}))
     model=ResearchToolsModel(respond=summarize,profile={'max_input_tokens':7000})
-    ctx=context(tmp_path,model);middleware=ContextMiddleware(ctx,model,'compression')
+    ctx=context(tmp_path,model);middleware=ContextManager(ctx,model,'compression')
     messages=[SystemMessage(content='保持参数和未知。'),HumanMessage(content='hard efficiency=0.95')]
     for i in range(9):
         messages += [tool('run_python',{'code':'long_code = '+repr('校验'*700)},str(i)),ToolMessage(content='真实输出'+str(i),tool_call_id=str(i),name='run_python')]
@@ -123,8 +124,8 @@ def test_token_compaction_keeps_requirements_recent_tools_and_reuses_summary(tmp
     sent=[]
     async def handler(request):sent.append(request.messages);return None
     async def run():
-        await middleware.awrap_model_call(Request(messages),handler)
-        await middleware.awrap_model_call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
+        await middleware.call(Request(messages),handler)
     asyncio.run(run())
     assert model.calls==1 and len(sent[0])<len(messages)
     assert sent[0][1].content=='hard efficiency=0.95'

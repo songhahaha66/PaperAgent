@@ -29,6 +29,8 @@ class Method:
 
 
 METHODS: List[Method] = [
+    Method("numerical_computation", "数值计算与规模检查", "科学计算", "网格、概率、优化或仿真计算", "含单位、范围和采样间隔的参数及数据",
+           ("统一单位与参数文件", "估计数组形状和内存", "小规模验证", "向量化或单调搜索", "保存入口与实际结果"), "先验证尺度与约束，再扩大计算；从原始输入复现"),
     Method("model_comparison", "监督学习方法比较", "预测", "比较同一预测任务的基线与候选模型", "带标签的表格数据，CSV或Excel均可",
            ("明确预测目标", "选择符合时间或分组结构的共同拆分", "仅在训练集拟合预处理和模型", "保存逐样本预测并计算共同指标", "解释差异与局限"), "测试集不参与调参；保存拆分和真实输出，实测差异不等于统计显著"),
     # 评价与决策
@@ -92,6 +94,7 @@ METHOD_INDEX: Dict[str, Method] = {m.key: m for m in METHODS}
 
 
 SKILL_SOURCES = {
+    'numerical_computation': ('NumPy broadcasting 文档', 'https://numpy.org/doc/stable/user/basics.broadcasting.html'),
     'model_comparison': ('scikit-learn 模型评估文档', 'https://scikit-learn.org/stable/modules/model_evaluation.html'),
     'regression': ('statsmodels 线性回归文档', 'https://www.statsmodels.org/stable/regression.html'),
     'arima': ('statsmodels ARIMA 文档', 'https://www.statsmodels.org/stable/generated/statsmodels.tsa.arima.model.ARIMA.html'),

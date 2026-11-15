@@ -23,6 +23,10 @@ def run_result(ctx, run_id, observation=None):
             'runtime_epoch':info.get('runtime_epoch'),'context_restored':info.get('context_restored'),
             'execution_mode':info.get('execution_mode'),'exit_code':info.get('exit_code'),
             'duration_seconds':info.get('duration_seconds'),
+            'entrypoint':info.get('entrypoint'),'argv':info.get('argv'),
+            'entrypoint_version':info.get('input_hashes',{}).get(info.get('entrypoint')),
+            'phase_timings':info.get('phase_timings',[]),'transfer':info.get('transfer',{}),
+            'environment':(info.get('process_receipt') or {}).get('environment'),
             'observation': observation, 'error': info.get('error'), 'failure_kind': info.get('failure_kind'),
             'delivery_error': info.get('delivery_error') or info.get('publication_error'),
             'runtime_note': ('执行环境已中断，旧Python变量不可依赖；读取保存的代码和文件恢复，不重放已完成计算。'

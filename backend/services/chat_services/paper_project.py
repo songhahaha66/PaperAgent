@@ -1,7 +1,9 @@
 """File-backed paper drafts, immutable source versions and range-local changes.
 
 Research sections are a projection used by the scheduler, never an alternative
-editable manuscript. Legacy TeX is imported byte-for-byte; no reverse conversion.
+editable manuscript. Preview and export both request compile_project: it owns
+source identity, cached PDF restoration, compilation and publication. A build
+may publish only against the source snapshot it actually compiled.
 """
 from services.file_services.workspace_layout import workspace_path
 import os
@@ -109,7 +111,8 @@ def files(root, main=None, *, verified_snapshot=False, missing=None):
                     if directory not in graphic_roots:graphic_roots.append(directory)
             for command, value in re.findall(r'\\(input|include|bibliography|addbibresource|includegraphics)(?:\[[^\]]*\])?\{([^{}]+)\}', dependency_text):
                 for item in value.split(','):
-                    relative = (Path(name).parent / item.strip()).as_posix()
+                    # TeX resolves these paths from the compiler cwd, including inside input files.
+                    relative = Path(item.strip()).as_posix()
                     _source_name(relative)
                     suffixes = [''] if Path(relative).suffix else (['.bib'] if command in {'bibliography','addbibresource'} else ['.tex'] if command in {'input','include'} else sorted(ASSET_SUFFIXES))
                     candidates=[relative]
@@ -381,10 +384,32 @@ async def decide(store, change_id, decision, *, compile_after=True, expected_ver
     return change
 
 
-async def compile_project(store):
-    """Compile an immutable source snapshot; failed builds retain the last PDF."""
+async def compile_project(store, *, on_compile=None):
+    """Ensure a PDF for current sources; share one build policy across all callers.
+
+    `compiled` describes this request, while `compile` is the durable build receipt.
+    A build lock makes concurrent preview/export requests share the same result.
+    The edit lock covers cache restoration/publication, never remote compilation.
+    """
+    from services.file_services.workspace_lock import paper_build_lock
+    async with paper_build_lock(store.root):
+        return await _compile_project(store,on_compile=on_compile)
+
+
+async def _compile_project(store, *, on_compile):
     from ai_system.export.latex import compile_pdf, BUILD_DIR, LatexResult
-    before=snapshot(store.root);version=before['version'];main=before['main']
+    from ai_system.sandbox.content_store import ContentStore
+    content=ContentStore(store.root,20_000_000)
+    with edit_lock(store.root):
+        before=snapshot(store.root);version=before['version'];main=before['main']
+        if not main.endswith('.tex'):raise ValueError('PDF 构建需要原生 TeX 项目')
+        data=meta(store.root)
+        compilation=data.get('compile',{})
+        if (data.get('pdf_version')==version and data.get('pdf_sha256') and
+                compilation.get('success') and compilation.get('state')=='current'):
+            content.materialize(data['pdf_sha256'],store.root/'paper.pdf')
+            return {**data,'compiled':False}
+    if on_compile:on_compile()
     (store.root/'.build').mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='paper-project-', dir=store.root/'.build') as folder:
         staging=Path(folder)
@@ -399,8 +424,6 @@ async def compile_project(store):
             import traceback
             result.log_path=f'{BUILD_DIR}/compile.log'
             atomic_text(staging/result.log_path,traceback.format_exc())
-        from ai_system.sandbox.content_store import ContentStore
-        content=ContentStore(store.root,20_000_000)
         if result.success:
             try:
                 pdf_hash=content.put(staging/result.pdf_path)
@@ -441,7 +464,7 @@ async def compile_project(store):
             else:
                 data['compile']={**compilation,'state':'failed','message':result.error or 'PDF 编译失败，上次成功预览已保留'}
             atomic_text(workspace_path(store.root, META),json.dumps(data,ensure_ascii=False))
-    return meta(store.root)
+    return {**meta(store.root),'compiled':True}
 
 
 def describe(store):

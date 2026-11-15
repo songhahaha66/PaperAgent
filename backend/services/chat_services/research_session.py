@@ -265,8 +265,7 @@ def research_snapshot(workspace: str | Path, work_id: str, status: str) -> Resea
     runtime['current']=max(running,key=lambda item:item.get('started_at') or 0,default=None)
     return ResearchSnapshot(
         snapshot_at=time.time(),
-        pending_question=(business['action']['inputs'].get('message') if business and business.get('action')
-                          and business['action']['capability']=='ask' and business['action']['status']=='waiting' else None),
+        pending_question=(business.get('pending_input') or {}).get('message') if business else None,
         inputs=[p for p in current_files if _file(root,p)],
         questions=control.get('questions',[]), evidence_uses=control.get('evidence_uses',[]),
         progress_plan=control.get('progress_plan'),

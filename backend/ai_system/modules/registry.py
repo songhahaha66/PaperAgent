@@ -1,7 +1,7 @@
 """The catalogue and validated handler boundary for research capabilities.
 
 ToolRuntime owns dispatch, receipts and Item lifecycle. Modules own products.
-LangGraph owns scheduling/checkpointing only.
+AgentLoop owns model/tool sequencing and session recovery.
 Registration fails on collisions and unknown capabilities fail closed.
 """
 from dataclasses import dataclass
@@ -65,21 +65,24 @@ class Capability:
 
 def display_inputs(name, inputs):
     """Keep writing metadata without copying manuscripts or replacement text."""
+    if name == 'workspace.edit':
+        return {'path':inputs.get('path'),'edit_mode':'replace' if inputs.get('edits') else 'write'}
     if not name.startswith('writing.'):
         return inputs
     if name == 'writing.edit':
         return {'path': inputs.get('path', 'paper.md'),
-                'edit_mode': 'replace' if inputs.get('old_text') is not None else 'write'}
+                'edit_mode': 'append' if inputs.get('append') else
+                             'replace' if inputs.get('old_text') is not None or inputs.get('edits') else 'write'}
     if name == 'writing.preview':
         pages = inputs.get('pages', [1])
-        return {'pages': [page for page in pages[:4] if type(page) is int] if isinstance(pages, list) else [],
-                'historical': bool(inputs.get('source_version'))}
+        return {'pages': [page for page in pages[:4] if type(page) is int] if isinstance(pages, list) else []}
     if name == 'writing.use_asset':
         return {key: inputs[key] for key in ('source', 'destination') if key in inputs}
     return {}
 
 
 def display_output(name, value):
+    if name == 'workspace.edit':return {k:value[k] for k in ('path','version','size') if k in value}
     if not name.startswith('writing.'):
         return value
     if name == 'writing.preview':
@@ -88,7 +91,7 @@ def display_output(name, value):
                 'warnings': [warning[:400] for warning in value.get('warnings', [])[:20] if isinstance(warning, str)],
                 'warning_count': len(value.get('warnings', []))}
     keys = {'writing.edit': ('path',), 'writing.use_asset': ('path',),
-            'writing.propose_edits': ('status',), 'writing.export': ('exports',)}.get(name, ())
+            'writing.propose_edits': ('status',), 'writing.export': ('exports','source_version','pdf_sha256','compiled')}.get(name, ())
     return {key: value[key] for key in keys if key in value}
 
 
@@ -158,11 +161,11 @@ _registry = None
 def capabilities():
     global _registry
     if _registry is None:
-        from . import literature, writing, experience, delegation, skill_tools
+        from . import literature, writing, experience, delegation, skill_tools, workspace
         from ai_system.research import feedback, operations
         from .experiments import module
         registry = ModuleRegistry()
-        for owner in (literature, module, writing, experience, feedback, operations, delegation, skill_tools):
+        for owner in (literature, module, writing, workspace, experience, feedback, operations, delegation, skill_tools):
             owner.register(registry)
         _registry = registry
     return _registry

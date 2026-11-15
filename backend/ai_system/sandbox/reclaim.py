@@ -100,7 +100,7 @@ def cache_labels(cache_key):
     return labels
 
 
-def sandbox_metadata(*, work_id, experiment_id, cache_key) -> dict:
+def sandbox_metadata(*, work_id, experiment_id, cache_key, application=APPLICATION) -> dict:
     """Labels stored on the OpenSandbox record. Listing filters on these.
 
     Values are Kubernetes-style labels. A 64-char cache digest does not fit,
@@ -109,7 +109,7 @@ def sandbox_metadata(*, work_id, experiment_id, cache_key) -> dict:
     """
     role = 'research' if experiment_id in {None, 'default', 'research'} else 'run'
     meta = {
-        'application': label_value(APPLICATION),
+        'application': label_value(application),
         'role': label_value(role),
         'cache_key': label_value(cache_key),
     }

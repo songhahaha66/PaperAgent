@@ -42,14 +42,8 @@ async def resume_saved_contract(agent):
     New-run lightweight decisions are exercised separately; these cases retain
     their original assumption IDs to verify repair and independent counterchecks.
     """
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from ai_system.graph.build import compile_graph
     if agent._load_thread() is None:
         thread='saved-contract'
         ResearchStore(agent.workspace_dir,thread).initialize(TASK,problem().model_dump())
         agent._save_thread(thread,'paused')
-        async with AsyncSqliteSaver.from_conn_string(str(workspace_path(Path(agent.workspace_dir), '.system/graph.sqlite'))) as saver:
-            graph=compile_graph(saver)
-            await graph.aupdate_state({'configurable':{'thread_id':thread}},
-                                     {'research_blocked':False},as_node='solve_join')
     return await agent.resume_failed()

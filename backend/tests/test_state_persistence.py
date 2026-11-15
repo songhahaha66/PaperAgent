@@ -8,7 +8,7 @@ import pytest
 from ai_system.research.store import ResearchStore
 from ai_system.agent.context import new_turn
 from ai_system.agent.protocol import ToolItem
-from ai_system.graph.agent import PaperGraphAgent
+from ai_system.agent.agent import PaperAgent
 from ai_system.graph.context import GraphContext
 from helpers.legacy_research import worker_context
 from ai_system.research.control import refresh_registry
@@ -74,16 +74,12 @@ def test_research_recovery_closes_unfinished_chat_text_in_its_turn(tmp_path):
 
 
 def test_resume_never_rebuilds_business_from_checkpoint(tmp_path):
-    agent = PaperGraphAgent(None, workspace_dir=str(tmp_path))
-    ctx = agent._context(); ctx.research = ResearchStore(tmp_path, 'missing')
-    class OldGraph:
-        async def aget_state(self, *_):
-            return SimpleNamespace(values={'task':'stale task', 'analysis':{'title':'stale'}})
-        async def ainvoke(self, *_args, **_kwargs):
-            pytest.fail('must not run without business state')
-    with pytest.raises(ValueError, match='研究状态不存在'):
-        asyncio.run(agent._resume_graph(OldGraph(), {}, 'missing', ctx))
-    assert ctx.research.snapshot() is None
+    from ai_system.agent.agent import PaperAgent
+    import pytest
+    agent=PaperAgent(None,workspace_dir=str(tmp_path))
+    agent._save_thread('missing','failed')
+    with pytest.raises(ValueError,match='研究状态不存在'):
+        asyncio.run(agent.resume_failed())
 
 
 def execution_files(store, key):
@@ -96,7 +92,6 @@ def execution_files(store, key):
     fs.finish_run(run)
     submit(store, key, {'count':1}, order=order)
     return fs, run
-
 
 def test_worker_copies_dependencies_and_not_independent_experiments(tmp_path):
     store = store_for(tmp_path)
@@ -134,33 +129,33 @@ def test_inheritance_uses_immutable_runs_and_skips_previously_inherited_runs(tmp
     assert target.read_text('outputs/base.csv') == 'new'
 
 
-def test_legacy_checkpoint_cleanup_preserves_history_and_resumes_from_store(tmp_path):
-    from langgraph.graph import START, END, StateGraph
-    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-    from ai_system.graph.state import PaperState
-    from ai_system.graph.build import compile_graph
-    from ai_system.graph.checkpoint import discard_business_mirror
-    async def run():
-        async with AsyncSqliteSaver.from_conn_string(str(tmp_path/'graph.sqlite')) as saver:
-            config = {'configurable': {'thread_id':'legacy'}}
-            old = StateGraph(PaperState)
-            old.add_node('solve_join', lambda state: {})
-            old.add_edge(START, 'solve_join'); old.add_edge('solve_join', END)
-            old = old.compile(checkpointer=saver)
-            await old.aupdate_state(config, {'task':'stale task','analysis':{'title':'stale title'},
-                                           'sections':{'old':'stale draft'}}, as_node='solve_join')
-            before = await saver.aget_tuple(config)
-            ctx = GraphContext.create(str(tmp_path), planner_llm=None)
-            ctx.research = ResearchStore(tmp_path, 'legacy')
-            ctx.research.initialize('authoritative task'); ctx.research.set_outcome('completed')
-            graph = compile_graph(saver)
-            await discard_business_mirror(graph, config)
-            await graph.aupdate_state(config, {'research_blocked':False}, as_node='solve_join')
-            result = await graph.ainvoke(None, config, context=ctx)
-            latest = (await saver.aget_tuple(config)).checkpoint['channel_values']
-            assert set(result) == {'research_blocked'}
-            assert not {'task','analysis','sections'} & set(latest)
-            assert ctx.research.snapshot()['spec']['requirement'] == 'authoritative task'
-            assert (await saver.aget_tuple(before.config)).checkpoint == before.checkpoint
-            await ctx.kernels.close()
-    asyncio.run(run())
+def test_loop_recovers_tool_receipt_after_crash_before_message_commit(tmp_path,monkeypatch):
+    from langchain_core.messages import AIMessage,HumanMessage,ToolMessage
+    from langchain_core.tools import StructuredTool
+    from ai_system.agent.loop import AgentLoop,run_session
+    from ai_system.agent.store import AgentStore
+    from research_tools_helpers import ResearchToolsModel,tool
+    from helpers.context import session_context
+    import pytest
+    calls=[]
+    async def compute():
+        calls.append('submitted');return 'verified result'
+    def respond(messages):
+        if any(isinstance(m,ToolMessage) for m in messages):
+            assert any(isinstance(m,AIMessage) and m.additional_kwargs.get('reasoning_content')=='provider continuation' for m in messages)
+            return AIMessage(content='done')
+        value=tool('compute',{},'one-call');value.additional_kwargs['reasoning_content']='provider continuation';return value
+    model=ResearchToolsModel(respond=respond);ctx=session_context(tmp_path,model)
+    agent=AgentLoop(model,[StructuredTool.from_function(coroutine=compute,description='Compute once')],'Compute.',ctx=ctx)
+    append=AgentStore.append_message
+    def interrupt(self,session,message):
+        if isinstance(message,ToolMessage):raise RuntimeError('crash after tool receipt')
+        return append(self,session,message)
+    monkeypatch.setattr(AgentStore,'append_message',interrupt)
+    with pytest.raises(RuntimeError,match='crash after tool receipt'):
+        asyncio.run(run_session(agent,'lead',[HumanMessage(content='go',id='request')],ctx=ctx))
+    monkeypatch.setattr(AgentStore,'append_message',append)
+    result=asyncio.run(run_session(agent,'lead',[HumanMessage(content='go',id='request')],ctx=ctx))
+    assert result['status']=='completed' and result['messages'][-1].content=='done'
+    assert calls==['submitted'] and len([m for m in result['messages'] if isinstance(m,ToolMessage)])==1
+    assert AgentStore(tmp_path).session('lead')['status']=='completed'

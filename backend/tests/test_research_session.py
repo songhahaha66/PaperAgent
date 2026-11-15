@@ -170,7 +170,7 @@ def web(monkeypatch, tmp_path):
         work.status = status
     monkeypatch.setattr("services.data_services.crud.update_work_status", update)
     monkeypatch.setattr(chat, "ChatService", Service)
-    monkeypatch.setattr(chat, "PaperGraphAgent", Agent)
+    monkeypatch.setattr(chat, "PaperAgent", Agent)
     monkeypatch.setattr(chat, "get_workspace_path", lambda work_id: root)
     monkeypatch.setattr(chat, "LLMHandler", lambda **kwargs: SimpleNamespace(get_llm_instance=lambda: Model()))
     monkeypatch.setattr(chat, "setup_environment_from_db", lambda *args: SimpleNamespace(
@@ -260,7 +260,7 @@ def test_main_agent_error_notice_ends_the_turn_as_failed(web, monkeypatch):
     client, work, calls, statuses, saved, root = web
     async def fail(self, text, **kwargs):
         await self.stream.send_json_block('main_agent_error', '模型执行失败，结果已保留')
-    monkeypatch.setattr(chat.PaperGraphAgent, 'run', fail)
+    monkeypatch.setattr(chat.PaperAgent, 'run', fail)
     events = exchange(client, {'problem':'执行新任务', 'action':'run'})
     assert events[-1]['type']=='complete' and events[-1]['work_status']=='failed'
     reply = durable_reply(root, events[0]['reply_id'], 'failed')
@@ -327,7 +327,7 @@ def test_auto_dispatches_execution_after_classification(web,monkeypatch,intent,e
         self.commit_completion()
         calls.append(('revise_research',kwargs))
         await self.stream.send_json_block('main_agent_complete','需求已更新')
-    monkeypatch.setattr(chat.PaperGraphAgent,'revise_research',revise,raising=False)
+    monkeypatch.setattr(chat.PaperAgent,'revise_research',revise,raising=False)
     if intent=='resume':work.status='failed'
     if intent=='respond':work.status='waiting'
     events=exchange(client,{'problem':'使用2025年并继续','request_id':'execute-'+intent})

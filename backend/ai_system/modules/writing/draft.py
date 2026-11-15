@@ -3,25 +3,16 @@ import hashlib
 from pydantic import Field
 from pydantic.json_schema import SkipJsonSchema
 from ai_system.modules.registry import Inputs, CapabilityProduct
+from ..file_edits import TextEdit, edited_text, observed_version
 
 
 class DraftEdit(Inputs):
     path: str = Field(default='paper.md', pattern=r'\.(md|tex|bib)$')
-    content: str
+    content: str | None = None
+    append: bool = Field(default=False,description='向 Markdown 正文或 TeX 章节文件追加 content；已有文件仍须先读。LaTeX主文件通过章节文件与 input 组织。')
+    edits: list[TextEdit] = Field(default_factory=list,description='同一文件的多处唯一原文替换，一次应用后再预览')
     expected_version: SkipJsonSchema[str | None] = None
     old_text: str | None = Field(default=None,description='局部修改时指定唯一的原文，content为替换内容；省略则写完整文件。')
-
-
-def observed_version(messages,name):
-    """Bind CAS to a receipt already seen by this Agent, never a model-copied hash."""
-    import json
-    from langchain_core.messages import ToolMessage
-    for message in reversed(messages):
-        if not isinstance(message,ToolMessage) or message.name not in {'research_read_artifact','writing_edit'} or message.status=='error':continue
-        try:value=json.loads(message.content)
-        except (ValueError,TypeError):continue
-        if isinstance(value,dict) and value.get('path')==name:return value.get('version')
-    return None
 
 
 async def edit(ctx, inputs):
@@ -34,16 +25,20 @@ async def edit(ctx, inputs):
         raise ValueError('本轮带有论文引用，请使用writing_propose_edits提出修改集，等待用户接受')
     if not name.endswith(('.md','.tex','.bib')):raise ValueError('正文仅支持 Markdown、TeX 或 BibTeX 文件')
     path=project.safe_path(ctx.workspace,name,writing=True)
-    if name.startswith(('data/','attachment/','outputs/','code/')):raise ValueError('正文不能覆盖资料或计算产物')
+    if name.startswith(('data/','attachment/','outputs/','code/','config/')):raise ValueError('正文不能覆盖资料或计算产物')
     project.initialize(ctx.research)
     raw=path.read_bytes() if path.exists() else b''
     before=raw.decode('utf-8')
     version=hashlib.sha256(raw).hexdigest()
     if before and inputs['expected_version']!=version:raise ResearchConflict('正文已存在或发生变化，请先读取当前文件再修改')
-    text=inputs['content'];old=inputs['old_text']
-    if old is not None:
-        if not old or before.count(old)!=1:raise ResearchConflict('待替换原文必须唯一，请重新读取当前稿件')
-        text=before.replace(old,text,1)
+    if inputs.get('append'):
+        if inputs['content'] is None or inputs['old_text'] is not None or inputs.get('edits'):
+            raise ValueError('追加时只提供 content，不同时指定 old_text 或 edits')
+        if ctx.output_mode=='latex' and name==(project.meta(ctx.workspace).get('main') or 'paper.tex'):
+            raise ValueError('LaTeX 主文件请先保存骨架，用 input 引入已保存章节；追加正文请写入章节文件')
+        text=before+inputs['content']
+    else:
+        text=edited_text(before,inputs['content'],inputs['old_text'],inputs.get('edits',[]))
     text=ctx.registry.render(text,latex=ctx.output_mode=='latex')
     if ctx.output_mode=='latex':
         from ai_system.research.citations import render_citations,literature_root
@@ -74,7 +69,7 @@ async def edit(ctx, inputs):
             state['sections']={'document':{'text':text,'revision':state.get('revision',0)+1,'content_hash':digest(text),
                 'task_refs':list(state['experiments']),'evidence_refs':[],'validity':'current'}}
             state['paper_hash']=digest(text);state['paper_version']=main
-        state['outcome']='running';state['delivery_stages']={};state['revision']+=1
+        state['delivery_stages']={};state['revision']+=1
         ctx.research._save(db,state,'manuscript_edited',{'path':name,'version':result_version})
     ctx.fs.register_file(name,kind='document',created_by='ai',visibility='user')
     await ctx.events.file_changed(name)

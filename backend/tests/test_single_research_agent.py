@@ -5,7 +5,7 @@ import json
 import pytest
 from langchain_core.messages import ToolMessage
 from ai_system.graph.context import GraphContext
-from ai_system.research.loop import prepare_action, resume
+from ai_system.research.session import run_research, resume
 from ai_system.research.runtime import ResearchRuntime, ModelServiceError
 from ai_system.research.store import ResearchStore
 from research_tools_helpers import ResearchToolsModel, tool
@@ -43,19 +43,19 @@ def test_materials_and_six_python_steps_stay_in_one_live_agent(tmp_path):
         return tool('research_deliver',{'title':'计算结果','reason':'已完成当前问题'},'deliver')
     ctx=make_context(tmp_path,respond)
     runtime=ResearchRuntime(tmp_path,'single-agent');runtime.configure({'request_limit':20,'compact_paper':False})
-    assert not asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))['status']=='completed'
     state=ctx.research.snapshot()
     assert ctx.planner_llm.calls==9 and runtime.status()['used']==9
     assert not state['experiments'] and not state['executions']
     assert len(ctx.fs._manifest['runs'])==6
     assert all(r['question_id']==qid for r in ctx.fs._manifest['runs'].values())
     assert (tmp_path/'outputs/intermediate/value.txt').read_text()=='6'
-    assert state['publication']['stage']=='export' and not ctx.kernels._kernels
+    assert state['outcome']=='completed' and not ctx.kernels._kernels
     assert not {'judgment','coverage','stop_reason'} & state['questions'][qid].keys()
     assert not any(a.get('tool_name')=='experiments.execute' for a in state['items'])
     assert not state['artifacts']
     assert all(ctx.fs.exists(r['stdout']) for r in ctx.fs._manifest['runs'].values())
-    assert (tmp_path/'code/research_solution.py').is_file()
+    assert (tmp_path/'outputs/code-history/research_solution.py').is_file()
 
 
 def test_recovery_reads_saved_files_without_replaying_previous_code(tmp_path):
@@ -69,7 +69,8 @@ def test_recovery_reads_saved_files_without_replaying_previous_code(tmp_path):
             return tool('research_run_python',{'question_id':qid,'code':"from pathlib import Path\nPath('outputs/intermediate').mkdir(parents=True,exist_ok=True)\nPath('outputs/intermediate/base.txt').write_text('6')\nprint(6)"},'code')
         raise ModelServiceError('controlled model interruption')
     ctx=make_context(tmp_path,initial)
-    assert asyncio.run(prepare_action(ctx))
+    with pytest.raises(ModelServiceError,match='controlled model interruption'):
+        asyncio.run(run_research(ctx))
     from copy import deepcopy
     before=deepcopy(ctx.fs._manifest['runs']);assert len(before)==1
     def resumed(messages):
@@ -81,7 +82,7 @@ def test_recovery_reads_saved_files_without_replaying_previous_code(tmp_path):
             assert '12' in json.loads(rows[-1].content)['observation']
         return tool('research_deliver',{'title':'恢复结果'},'deliver')
     resume(ctx.research);ctx.planner_llm=ResearchToolsModel(respond=resumed)
-    assert not asyncio.run(prepare_action(ctx))
+    assert asyncio.run(run_research(ctx))['status']=='completed'
     after=ctx.research.snapshot()
     assert not after['executions'] and len(ctx.fs._manifest['runs'])==2
     for key,receipt in before.items():assert ctx.fs.get_run_info(key)==receipt
