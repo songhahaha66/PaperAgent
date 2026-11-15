@@ -65,45 +65,7 @@ def state_update(before, after):
         additional_kwargs={'context_update':True})
 
 
-def message_estimate(messages, *, image_counter=None):
-    """Count model content, not response headers or encrypted transport bytes.
-
-    Opaque reasoning keeps its provider payload. Its returned output-token usage
-    bounds the generated item instead of tokenizing the encrypted ciphertext.
-    Actual input usage remains the anchor for subsequent unchanged prefixes.
-    """
-    total=0
-    for message in messages:
-        content=message.content
-        opaque=False
-        if isinstance(message,AIMessage) and isinstance(content,list):
-            opaque=any(isinstance(part,dict) and part.get('type') in {'reasoning','redacted_thinking'} for part in content)
-            content=[part for part in content if not isinstance(part,dict)
-                     or part.get('type') not in {'reasoning','redacted_thinking'}]
-        value={'role':message.type,'content':content}
-        if isinstance(message,AIMessage):
-            value['tool_calls']=message.tool_calls
-            if message.additional_kwargs.get('reasoning_content'):
-                value['reasoning_content']=message.additional_kwargs['reasoning_content']
-        if isinstance(message,ToolMessage):value.update(name=message.name,tool_call_id=message.tool_call_id)
-        count=token_estimate(value,image_counter=image_counter)
-        if opaque:count=max(count,(message.usage_metadata or {}).get('output_tokens',0))
-        total+=count
-    return total
-
-
-def token_estimate(value,*,image_counter=None):
-    if isinstance(value,list):return sum(token_estimate(v,image_counter=image_counter) for v in value)
-    if isinstance(value,dict):
-        if value.get('type')=='image_ref':return value['tokens']
-        if value.get('type') in {'image','image_url'} and ('image_url' in value or 'source' in value):
-            if image_counter is None:
-                from ..config.generation import ModelContextLimit
-                raise ModelContextLimit('图片计量需要指定模型，不能使用固定token常数。')
-            return image_counter(value)
-        return sum(token_estimate(k,image_counter=image_counter)+token_estimate(v,image_counter=image_counter) for k,v in value.items())
-    text=value if isinstance(value,str) else json.dumps(value,ensure_ascii=False,default=str)
-    return sum(1 if ord(c)>127 else .3 for c in text).__ceil__()
+from .metering import message_estimate, token_estimate, request_estimate, input_limit
 
 
 def summary_model(llm):
@@ -214,7 +176,7 @@ class ContextManager:
         from ai_system.research.runtime import execution_scope,ModelServiceError
         from ai_system.research.store import digest
         from ai_system.graph.llm_utils import as_messages, call_structured
-        from ai_system.config.generation import ensure_complete,ModelGenerationLimit,ModelContextLimit,ModelContextOverflow
+        from ai_system.config.generation import ensure_complete,ModelGenerationLimit,ModelContextLimit,ModelContextOverflow,FixedContextLimit,ContextCompactionFailed
         from langchain_core.utils.function_calling import convert_to_openai_tool
         store=self.ctx.research
         self.messages=list(request.messages)
@@ -226,9 +188,7 @@ class ContextManager:
         overhead=tools+(message_estimate([system]) if system else 0)
         profile=getattr(self.llm,'profile',None) or {}
         # Output reservation is deducted once; targets are not model hard limits.
-        limit=int(profile.get('max_input_tokens') or profile.get('max_context_tokens') or 32000)
-        if profile.get('max_context_tokens'):
-            limit=min(limit,int(profile['max_context_tokens'])-int(getattr(self.llm,'max_tokens',None) or 4800))
+        limit=input_limit(self.llm)
         high=int(limit*.8);low=int(limit*.5);safe=int(limit*.95)
         messages=list(self.messages)
         boundaries=complete_boundaries(messages)
@@ -301,7 +261,7 @@ class ContextManager:
             return prefix+corrections+memory+current+messages[end:]
         def size(rows):
             priced=media.view(rows,max_tokens=max(0,safe-overhead))
-            estimated=overhead+estimate_messages(priced)
+            estimated=request_estimate(([system] if system else [])+priced,schemas,image_counter=media.native_tokens)
             # Reuse actual usage only for an unchanged route and complete prefix.
             # An omitted image, compaction or model switch invalidates the anchor.
             if anchor.get('route')==route:
@@ -338,7 +298,8 @@ class ContextManager:
             # must not reject a legal large latest turn. Force mode requires an
             # actual reduction before one rejected request may be retried.
             end=None
-            for target in (low,high,safe):
+            targets=(low,high,safe) if not force else tuple(min(t,int(size(view())*.8)) for t in (low,high,safe))
+            for target in targets:
                 end=next((i for i in candidates if size(view({**saved,'cut':i,'summary':'','fallback':[],
                         'snapshot':current}))+reserve+200<=target),None)
                 if end is not None:
@@ -352,7 +313,7 @@ class ContextManager:
                         'summary':'','fallback':[],'snapshot':current}))+reserve+200<=safe:
                     end=len(messages);selected_target=safe
                 else:
-                    raise ModelContextLimit(f'近期完整工具轮次或固定要求超过安全上下文预算：输入约{size(view())}，'
+                    raise FixedContextLimit(f'近期完整工具轮次或固定要求超过安全上下文预算：输入约{size(view())}，'
                                             f'安全上限{safe}，模型输入上限{limit}，系统与工具约{overhead}；原始记录已保留。')
             # Archive only the retiring span, with a chain to prior spans and
             # character locators usable by the existing paginated file reader.
@@ -404,7 +365,7 @@ class ContextManager:
                 summary_status='retained_history'
                 if not force and size(view())<=safe:return
                 persist()
-                raise ModelContextLimit('无法在安全容量内生成完整续接内容；保留原历史边界，不重放计算或反复摘要。')
+                raise ContextCompactionFailed('压缩续接未达到容量目标；已保留原历史边界及原文定位，未重放计算。')
             saved=candidate;cut=end
             summary_status='summarized' if valid else 'public_history_fallback'
 
