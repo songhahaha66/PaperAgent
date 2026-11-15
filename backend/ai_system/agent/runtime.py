@@ -78,6 +78,12 @@ def gates(ctx):
     return ctx.tool_gates
 
 
+def check_tool_access(ctx, name):
+    allowed=getattr(ctx,'allowed_capabilities',None)
+    if allowed is not None and name not in allowed:
+        raise ValueError('fork子任务不能执行 '+name+'；只处理分配范围，返回结果交由主Agent整合。')
+
+
 class ToolExecution:
     def __init__(self, ctx, turn, invocation):
         from ai_system.research.runtime import execution_links
@@ -199,6 +205,7 @@ async def dispatch(ctx, invocation, handler):
             turn.put(operation.snapshot(), 'item/started')
         token = CURRENT_TOOL.set(operation)
         try:
+            check_tool_access(ctx,invocation.name)
             async with limits.acquire(invocation.access):
                 with execution_scope(tool_call_id=invocation.call_id, parent_call_id=operation.item['id'],
                                      events=getattr(ctx,'events',None), research_id=getattr(getattr(ctx,'research',None),'research_id',None)):

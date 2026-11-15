@@ -141,10 +141,12 @@ def public_journal(messages, locators):
 
 
 class ContextManager:
-    def __init__(self,ctx,llm,session,*,pinned=None,tail=None):
+    def __init__(self,ctx,llm,session,*,pinned=None,tail=None,preserved_prefix=0):
         self.ctx,self.llm,self.session=ctx,llm,session
         self.messages=[];self.pinned=pinned
         self.tail=tail
+        self.preserved_prefix=preserved_prefix
+        self.last_request=None
 
     def notes(self,messages):
         from ai_system.research.runtime import ACTIVE_BUDGET
@@ -267,10 +269,11 @@ class ContextManager:
             return working_context(self.ctx)
         if 'snapshot' not in saved:
             has_snapshot=any(m.additional_kwargs.get('context_snapshot') for m in messages[:start])
-            saved['snapshot']=None if has_snapshot else snapshot()
+            saved['snapshot']=None if has_snapshot or self.preserved_prefix else snapshot()
         offloads=saved.setdefault('offloads',{})
         for i,message in enumerate(messages):
             if i<cut:continue
+            if i<self.preserved_prefix:continue
             entry=offloads.get(str(i))
             if entry and entry['hash']==digest(messages_to_dict([message])):
                 messages[i]=message.model_copy(update={'content':entry['content']})
@@ -313,6 +316,7 @@ class ContextManager:
             nonlocal masked
             recent=boundaries[-2] if len(boundaries)>1 else start
             for i in range(saved['cut'],recent):
+                if i<self.preserved_prefix:continue
                 if offloads.get(str(i),{}).get('tier')=='receipt':continue
                 # Always derive from the original, never archive an old preview.
                 replacement=self.offload(self.messages[i],old=True)
@@ -404,7 +408,10 @@ class ContextManager:
             saved=candidate;cut=end
             summary_status='summarized' if valid else 'public_history_fallback'
 
-        if size(view())>high:await compact()
+        # Keep an inherited effective request intact while it still fits; only
+        # capacity pressure may retire the shared prefix through normal compaction.
+        threshold=safe if self.preserved_prefix>saved['cut'] else high
+        if size(view())>threshold:await compact()
 
         degraded=False
         async def send():
@@ -446,6 +453,7 @@ class ContextManager:
                    'cache_phase':phase,'reused_prefix_messages':common}
             try:
                 with execution_scope(context_usage=stats):
+                    self.last_request=request.override(messages=bounded)
                     wire_messages=await asyncio.to_thread(media.hydrate,bounded)
                     response=await handler(request.override(messages=wire_messages))
                     ensure_complete(response)

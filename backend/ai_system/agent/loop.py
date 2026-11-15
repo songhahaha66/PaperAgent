@@ -53,7 +53,7 @@ class AgentLoop:
         self.model,self.tools,self.system_prompt=model,tools,system_prompt
         self.ctx,self.context=ctx,context
         self.prepare,self.execute,self.finish=prepare,execute,finish
-        self.tool_map={tool.name:tool for tool in tools}
+        self.tool_map={tool.name:tool for tool in tools if hasattr(tool,'name')}
 
     async def _execute(self, call, *, recover_only=False):
         if self.execute:
@@ -149,8 +149,19 @@ class AgentLoop:
                         store.append_message(session,message);history.append(message)
                 for message in context.notes(history):
                     store.append_message(session,message);history.append(message)
-                request=ModelRequest(history,self.tools,SystemMessage(content=self.system_prompt))
+                system=self.system_prompt if isinstance(self.system_prompt,SystemMessage) else SystemMessage(content=self.system_prompt)
+                request=ModelRequest(history,self.tools,system)
                 async def invoke(request):
+                    from langchain_core.messages import message_to_dict, messages_to_dict
+                    from langchain_core.utils.function_calling import convert_to_openai_tool
+                    from ai_system.core_handlers.model_runtime import model_identity
+                    effective=getattr(context,'last_request',None) or request
+                    snapshot={'system':message_to_dict(effective.system_message),
+                              'messages':messages_to_dict(effective.messages),
+                              'tools':[convert_to_openai_tool(t) for t in effective.tools],
+                              'model_identity':model_identity(self.model)}
+                    store.save_request(session,snapshot)
+                    self.ctx.agent_model=self.model
                     model=self.model.bind_tools(request.tools) if request.tools else self.model
                     return await model.ainvoke([request.system_message,*request.messages],config={'callbacks':MODEL_CALLBACKS.get(),'metadata':{'agent_session':session}})
                 response=await context.call(request,invoke)

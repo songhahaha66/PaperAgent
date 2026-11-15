@@ -34,6 +34,7 @@ class AgentStore:
                 CREATE TABLE IF NOT EXISTS tool_calls(thread_id TEXT NOT NULL, call_id TEXT NOT NULL,
                     signature TEXT NOT NULL, PRIMARY KEY(thread_id, call_id));
                 CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY, status TEXT NOT NULL, reason TEXT);
+                CREATE TABLE IF NOT EXISTS session_requests(session_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS session_messages(sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(session_id,id));
             ''')
@@ -43,6 +44,17 @@ class AgentStore:
         with closing(self.connect()) as db:
             rows=db.execute('SELECT payload FROM session_messages WHERE session_id=? ORDER BY sequence',(session,)).fetchall()
         return messages_from_dict([json.loads(row[0]) for row in rows])
+
+    def save_request(self, session, request):
+        """Last effective request, with durable image refs rather than image bytes."""
+        with self.transaction() as db:
+            db.execute('INSERT OR REPLACE INTO session_requests VALUES (?,?)',
+                       (session,json.dumps(request,ensure_ascii=False)))
+
+    def request(self, session):
+        with closing(self.connect()) as db:
+            row=db.execute('SELECT payload FROM session_requests WHERE session_id=?',(session,)).fetchone()
+        return json.loads(row[0]) if row else None
 
     def append_message(self, session, message):
         from langchain_core.messages import message_to_dict

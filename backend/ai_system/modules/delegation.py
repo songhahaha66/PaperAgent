@@ -39,6 +39,7 @@ async def delegate(ctx, inputs):
     record=json.loads(row[0]) if row else None
     if record and record.get('purpose')=='document_review':raise ValueError('只读复核子任务不能改为计算任务，请创建新任务')
     if inputs['task_id'] and record is None:raise ValueError('子任务不存在')
+    mode=(record or {}).get('context_mode',inputs['context_mode'])
     sources={}
     for name in inputs['files']:
         if name.split('/')[0] not in {'data','attachment','outputs','code','config'} and name not in {'paper.md','paper.tex','paper-sources.bib'}:
@@ -68,7 +69,7 @@ async def delegate(ctx, inputs):
             target.parent.mkdir(parents=True,exist_ok=True)
             shutil.copyfile(ctx.fs.canonical_artifact(name),target)
         local.fs.register_file(aliases[name],kind='data',visibility='user')
-    record={**(record or {}),'task_id':tid,'task':inputs['task'],'context_mode':inputs['context_mode'],
+    record={**(record or {}),'task_id':tid,'task':inputs['task'],'context_mode':mode,
             'inputs':sources,'initial_task':(record or {}).get('initial_task',inputs['task']),'status':'running'}
     def save():
         with store._transaction() as db:
@@ -81,7 +82,7 @@ async def delegate(ctx, inputs):
         from ai_system.research.runtime import CURRENT_EXECUTION
         local.fs.get_run_info(run_id)['tool_call_id']=CURRENT_EXECUTION.get().get('tool_call_id')
         local.fs._save_manifest()
-    tools=build_tools(local,'task-'+tid,runs,kernel_key='task-'+tid,on_run=remember_run)
+    tools=build_tools(local,'task-'+tid,runs,kernel_key='task-'+tid,on_run=remember_run) if mode!='fork' else []
     async def read(path:str,start:int=0,limit:int=12000):
         value=await read_artifact(local,{'path':path,'task_id':None,'start':start,'limit':min(max(limit,1),24000)})
         return value.value
@@ -89,18 +90,30 @@ async def delegate(ctx, inputs):
     prompt=('你是研究主Agent委派的子任务执行者。只处理分配的范围；可读取指定材料、运行Python、检索资料。'
             '不要改写主论文，不再委派。返回实际结论、使用的条件、结果文件路径、已做的校验、错误和未知。'
             '执行成功不代表结论正确，检查失败必须明确说明。不要假定恢复后Python变量还存在。')
-    history=list(getattr(ctx,'agent_messages',[])) if inputs['context_mode']=='fork' and not row else []
-    messages=[*history,HumanMessage(content=json.dumps({'task':inputs['task'],'files':sources,'local_paths':aliases,'runtime_note':'新子任务使用独立Python上下文；继续已有子任务时优先重连原上下文，未确认恢复时只复用文件。不要重放已完成运行。'},ensure_ascii=False))]
+    session=store.research_id+'-task-'+tid
+    model=ctx.coder_llm
+    execute=None
+    history=[]
     try:
         if record.get('model_task')!=inputs['task'] or 'answer' not in record:
+            if mode=='fork':
+                from ai_system.agent.fork import prepare_fork,task_message,executor
+                model,prompt,tools,history=prepare_fork(ctx,local,session)
+                messages=[*history,task_message(inputs['task'],sources,aliases,tid)]
+                execute=executor(local,tools,remember_run)
+            else:
+                messages=[HumanMessage(content=json.dumps({'task':inputs['task'],'files':sources,'local_paths':aliases,'runtime_note':'新子任务使用独立Python上下文；继续已有子任务时优先重连原上下文，未确认恢复时只复用文件。不要重放已完成运行。'},ensure_ascii=False))]
             from ai_system.graph.tracing import labelled
             with execution_scope(step='独立子任务',subject=tid),labelled('task:'+tid):
-                agent=AgentLoop(ctx.coder_llm,tools,prompt,ctx=local,
-                    context=ContextManager(local,ctx.coder_llm,store.research_id+'-task-'+tid,
+                agent=AgentLoop(model,tools,prompt,ctx=local,execute=execute,
+                    context=ContextManager(local,model,session,preserved_prefix=len(history),
                         pinned={'initial_task':record['initial_task'],'follow_up':inputs['task'],'files':sources}))
-                result=await run_session(agent,store.research_id+'-task-'+tid,messages,ctx=local)
+                result=await run_session(agent,session,messages,ctx=local)
             record.update(answer='\n\n'.join(public_progress(result['messages'][-1].content)),model_task=inputs['task'],status='delivering')
             save()
+        if mode=='fork':
+            runs=[{'run_id':rid,'ok':info.get('status')=='success','code':local.fs.read_text(info['input'])}
+                  for rid,info in local.fs._manifest.get('runs',{}).items() if info.get('input') and local.fs.exists(info['input'])]
         export_solution_code(local,'task',runs)
         # Reuse the existing immutable run publisher, including logs and code.
         from ai_system.sandbox.artifacts import capture_run_files

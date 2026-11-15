@@ -124,6 +124,8 @@ class ModuleRegistry:
 
     async def execute(self, name, inputs, ctx):
         """Handler/schema boundary. ToolRuntime owns identity and lifecycle."""
+        from ai_system.agent.runtime import check_tool_access
+        check_tool_access(ctx,name)
         capability = self.get(name)
         if capability is None:
             raise ValueError(f"未注册能力：{name}")
@@ -141,6 +143,8 @@ class ModuleRegistry:
             CURRENT_CAPABILITY.reset(token)
 
     def execute_internal_sync(self, request: CapabilityRequest, ctx):
+        from ai_system.agent.runtime import check_tool_access
+        check_tool_access(ctx,request.name)
         capability = self._capabilities.get(request.name)
         if capability is None:
             raise ValueError(f"未注册能力：{request.name}")

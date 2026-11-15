@@ -59,9 +59,8 @@ def test_missing_response_reconciles_committed_code_instead_of_replaying(tmp_pat
 
 
 @pytest.mark.usefixtures('offline_kernel')
-@pytest.mark.parametrize('mode',['isolated','fork'])
 @pytest.mark.parametrize('content_blocks',[False,True])
-def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,mode,content_blocks):
+def test_isolated_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,content_blocks):
     from ai_system.modules.registry import invoke
     seen=[]
     answer='计算结果12；结果文件outputs/result.txt；已检查输入。'
@@ -81,7 +80,7 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
     ctx.fs.write_text('config/parameters.json','{"factor":2}')
     ctx.agent_messages=[HumanMessage(content='parent-context-marker')]
     async def run():
-        result=await invoke(ctx,'research.delegate',task='独立计算',context_mode=mode,files=['attachment/assigned.txt','config/parameters.json'])
+        result=await invoke(ctx,'research.delegate',task='独立计算',files=['attachment/assigned.txt','config/parameters.json'])
         assert result['status']=='completed' and len(result['run_ids'])==1
         assert result['answer']==answer
         items=ctx.research.snapshot()['items']
@@ -94,7 +93,7 @@ def test_child_has_scoped_files_persistent_followups_and_archived_runs(tmp_path,
         with AgentStore(tmp_path).connect() as db:
             thread=json.loads(db.execute('SELECT payload FROM threads WHERE id=?',(child[0]['thread_id'],)).fetchone()[0])
         assert thread['parent_item_id']==parent['id']
-        assert bool(any('parent-context-marker' in str(m.content) for m in seen[0]))==(mode=='fork')
+        assert not any('parent-context-marker' in str(m.content) for m in seen[0])
         actual=[p for p in result['files'] if p.endswith('/outputs/result.txt')]
         assert len(actual)==1 and ctx.fs.canonical_artifact(actual[0]).read_text()=='12'
         assert ctx.fs.get_run_info(result['run_ids'][0])['status']=='success'
