@@ -9,6 +9,7 @@ export interface WorkCreate {
 }
 
 export interface WorkUpdate {
+  is_hidden?: boolean
   title?: string
   description?: string
   tags?: string
@@ -17,6 +18,7 @@ export interface WorkUpdate {
 }
 
 export interface Work {
+  is_hidden?: boolean
   architecture_version?: number
   execution_reason?: { kind: string; message: string } | null
   id: number

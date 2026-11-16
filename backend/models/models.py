@@ -74,6 +74,7 @@ class Project(Base):
     title = Column(String(200), nullable=False)  # 工作标题
     description = Column(Text)  # 工作描述
     status = Column(String(50), nullable=False, default="created")  # 工作状态
+    is_hidden = Column(Boolean, nullable=False, default=False, server_default="0")
     tags = Column(Text)  # 标签，JSON格式存储
     template_id = Column(Integer, ForeignKey("paper_templates.id"), nullable=True)  # 关联的论文模板ID
     output_mode = Column(String(20), nullable=False, default="markdown")  # 输出模式：markdown, word, latex
