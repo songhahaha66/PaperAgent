@@ -23,6 +23,16 @@ def shape(value, pointer, depth=1):
     return result
 
 
+class JsonPointerLookupError(ValueError):
+    """Keep field coordinates typed across the tool/public-diagnostic boundary."""
+    def __init__(self, pointer, current, value):
+        node = shape(value, current)
+        self.diagnostic = {'pointer': pointer, 'current': current,
+                           **{key: node[key] for key in ('type', 'size', 'keys') if key in node}}
+        super().__init__(f'JSON 路径 {pointer!r} 不存在；当前节点 {current!r}：'
+                         + json.dumps(node, ensure_ascii=False)[:2000])
+
+
 def select(value, pointer):
     if pointer and not pointer.startswith('/'):
         raise ValueError('json_pointer 使用 /字段/数组下标，例如 /q2/0/optimum；空字符串表示根节点')
@@ -36,8 +46,7 @@ def select(value, pointer):
         elif isinstance(value, list) and re.fullmatch(r'0|[1-9][0-9]*', key) and int(key) < len(value):
             value = value[int(key)]
         else:
-            available = json.dumps(shape(value, current), ensure_ascii=False)
-            raise ValueError(f'JSON 路径 {pointer!r} 不存在；当前节点 {current!r}：{available[:2000]}')
+            raise JsonPointerLookupError(pointer, current, value)
         current = child_pointer(current, key)
     return value
 

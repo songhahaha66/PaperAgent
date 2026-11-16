@@ -48,6 +48,38 @@ def test_json_structure_selection_and_versioned_paging(tmp_path):
     asyncio.run(run())
 
 
+def test_json_lookup_errors_keep_field_paths_in_public_tool_items(tmp_path):
+    from ai_system.agent.projection import safe_diagnostic
+    from ai_system.agent.store import AgentStore
+    from ai_system.research.json_views import JsonPointerLookupError
+    ctx = session_context(tmp_path)
+    ctx.fs.write_text('outputs/answer.json', json.dumps({
+        'Q4': {'monthly': [], 'repeated_vs_unique': {}, 'sk-private-test-secret': None},
+        'a/b': {'~key': [0]}, 'file': '/home/owner/private.json',
+    }), kind='data')
+
+    async def run():
+        for pointer, current in [('/Q4/repeat_groups', '/Q4'), ('/a~1b/~0key/2', '/a~1b/~0key'), ('/file/missing', '/file')]:
+            with pytest.raises(JsonPointerLookupError, match='不存在'):
+                await invoke(ctx, 'research.read_artifact', path='outputs/answer.json', json_pointer=pointer)
+            failed = [item for item in AgentStore(tmp_path).items() if item.get('status') == 'failed'][-1]
+            message = failed['message']
+            assert pointer in message and current in message
+            assert '[工作区外路径]' not in message
+            assert '/home/owner' not in message and 'sk-private-test-secret' not in message
+            if pointer.startswith('/Q4'):
+                assert 'monthly' in message and 'repeated_vs_unique' in message
+            elif pointer.startswith('/a~1b'):
+                assert '数组长度：1' in message
+            else:
+                assert '节点类型：string' in message
+        # A JSON-looking string alone must not exempt a real filesystem path.
+        message = safe_diagnostic(tmp_path, "JSON 路径 '/home/owner/private.json' 不存在；api_key='owner-secret'")
+        assert '/home/owner' not in message and 'owner-secret' not in message
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('mode',['markdown','latex'])
 def test_chapter_drafts_survive_interruption_and_keep_edit_conflicts(tmp_path,mode):
     main='paper.tex' if mode=='latex' else 'paper.md'

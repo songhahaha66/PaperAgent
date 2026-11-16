@@ -229,7 +229,10 @@ async def dispatch(ctx, invocation, handler):
                     return result
         except BaseException as exc:
             from ai_system.research.review_cache import error_detail
+            from ai_system.research.json_views import JsonPointerLookupError
             operation.metadata.update(error_type=type(exc).__name__, message=error_detail(exc))
+            if isinstance(exc, JsonPointerLookupError):
+                operation.metadata['json_pointer_error'] = exc.diagnostic
             if operation.item['type']=='plan':operation.item['explanation']=safe_diagnostic(turn.store.root,error_detail(exc))
             operation.finish('interrupted' if isinstance(exc, asyncio.CancelledError) else 'failed')
             raise
