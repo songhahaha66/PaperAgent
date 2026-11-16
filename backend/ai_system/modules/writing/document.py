@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from ..registry import Inputs, CapabilityProduct
 from services.chat_services import paper_project as project
 from services.file_services.workspace_layout import workspace_path
@@ -12,11 +12,29 @@ from services.file_services.workspace_lock import edit_lock
 from ai_system.sandbox.content_store import ContentStore
 
 ASSETS = '.system/paper-project/assets.json'
+ASSET_DIRECTORIES = ('figures', 'tables', 'paper-assets')
+ASSET_SUFFIXES = project.ASSET_SUFFIXES | {'.csv', '.json', '.py', '.tex'}
+ASSET_DESTINATION_RULE = ('目标只能位于 ' + '、'.join(name+'/' for name in ASSET_DIRECTORIES)
+                          + '；支持扩展名：' + '、'.join(sorted(ASSET_SUFFIXES))
+                          + '。不用于向 data/ 或 attachment/ 整理复现资料；不得覆盖已有不同文件。')
+
+
+def asset_destination(name):
+    from services.file_services.workspace_layout import relative_parts
+    parts = relative_parts(name)
+    if parts[0] not in ASSET_DIRECTORIES or len(parts) < 2 or Path(name).suffix.lower() not in ASSET_SUFFIXES:
+        raise ValueError(ASSET_DESTINATION_RULE)
+    return name
 
 
 class AssetInput(Inputs):
-    source: str = Field(description='research_list_files返回的实际结果路径。')
-    destination: str = Field(description='论文内使用的新路径，如figures/forecast.png；不得覆盖已有不同文件。')
+    source: str = Field(description='research_list_files返回的工作区材料或结果文件路径。')
+    destination: str = Field(description='论文依赖的相对路径，如 figures/forecast.png。'+ASSET_DESTINATION_RULE)
+
+    @field_validator('destination')
+    @classmethod
+    def validate_destination(cls, name):
+        return asset_destination(name)
 
 
 class ReferenceEdit(Inputs):
@@ -56,12 +74,8 @@ async def use_asset(ctx, inputs):
     from ai_system.research.files import resolve
     from services.file_services.workspace_layout import safe_join
     source=resolve(ctx,inputs['source'])
-    name=inputs['destination']
+    name=asset_destination(inputs['destination'])
     target=safe_join(ctx.workspace,name)
-    if Path(name).parts[0] not in {'figures','tables','paper-assets'}:
-        raise ValueError('论文依赖请放入figures/、tables/或paper-assets/')
-    if Path(name).suffix.lower() not in project.ASSET_SUFFIXES | {'.csv','.json','.py','.tex'}:
-        raise ValueError('不支持此类论文依赖')
     store=ContentStore(ctx.workspace,20_000_000)
     version=await asyncio.to_thread(store.put,source)
     with edit_lock(ctx.workspace):
@@ -113,6 +127,6 @@ def register(registry):
     registry.register('writing','writing.propose_edits','paper',propose_edits,ReferenceEdits,model_callable=True,
         purpose='用户要求修改本轮论文引用时，按reference编号提出版本化修改集，等待用户接受。无确认源码范围时不能猜测位置。')
     registry.register('writing','writing.use_asset','paper',use_asset,AssetInput,model_callable=True,
-        purpose='把选定结果复制为固定版本的论文图片、表格或代码依赖，返回实际引用路径；保留来源，不覆盖旧版本。')
+        purpose='把选定结果复制为固定版本的论文图片、表格、代码或字体依赖，返回实际引用路径；保留来源。'+ASSET_DESTINATION_RULE)
     registry.register('writing','writing.preview','paper',preview,PreviewInput,model_callable=True,
         purpose='编译或复用当前TeX项目的PDF，查看实际页面、文本和排版警告；修改正文后重新预览。')

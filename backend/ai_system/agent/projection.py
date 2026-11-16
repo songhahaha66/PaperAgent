@@ -1,5 +1,6 @@
 """Public tool details. Never persist raw tool requests or model results as Items."""
 from pathlib import Path
+import json
 import re
 from services.file_services.workspace_layout import workspace_path
 RESEARCH_SOURCE_REFS = {'research:feedback', 'research:consistency'}
@@ -21,7 +22,7 @@ def safe_file(root, value, *, nonempty=False):
 
 
 
-def safe_diagnostic(root, value, limit=400):
+def safe_diagnostic(root, value, limit=400, *, json_pointer=False):
     """Bound existing error_detail output; remove secrets, prompt dumps and paths.
 
     Tool exceptions use review_cache.error_detail (validation errors
@@ -42,11 +43,29 @@ def safe_diagnostic(root, value, limit=400):
     text = re.sub(r'(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+', r'\1[已隐藏]', text)
     text = re.sub(r"(?i)((?:api[_-]?key|access[_-]?token|authorization|sa[_-]?token|password|secret|credential)[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)", r'\1[已隐藏]', text)
     text = re.sub(r'\bsk-[A-Za-z0-9_-]{8,}', '[已隐藏]', text)
-    if root is not None:text = text.replace(str(Path(root).resolve()) + '/', '')
-    text = re.sub(r'(?<![\w.])(?:[A-Za-z]:[\\/]|/)[^\s<>\"\']+', '[工作区外路径]', text)
-    text = re.sub(r'\.system/[^\s<>\"\']+', '[内部记录]', text)
+    # Only explicitly typed JSON field coordinates skip filesystem redaction.
+    # Credential/URL/prompt filtering still applies to those field names.
+    if not json_pointer:
+        if root is not None:text = text.replace(str(Path(root).resolve()) + '/', '')
+        text = re.sub(r'(?<![\w.])(?:[A-Za-z]:[\\/]|/)[^\s<>\"\']+', '[工作区外路径]', text)
+        text = re.sub(r'\.system/[^\s<>\"\']+', '[内部记录]', text)
     text = re.sub(r'(?i)(?:system[_ -]?prompt|prompt|messages)\s*[:=].*', '[内部请求已隐藏]', text)
     return text[:limit]
+
+
+def json_pointer_diagnostic(root, diagnostic):
+    def field(value):
+        return safe_diagnostic(root, json.dumps(value, ensure_ascii=False), limit=160, json_pointer=True)
+    text = (f"JSON 路径 {field(diagnostic['pointer'])} 不存在；当前节点 "
+            + (field(diagnostic['current']) if diagnostic['current'] else '根节点'))
+    if diagnostic['type'] == 'object':
+        text += '；可用字段：' + '、'.join(field(key) for key in diagnostic.get('keys', [])[:20])
+    elif diagnostic['type'] == 'array':
+        size = diagnostic['size']
+        text += f'；数组长度：{size}，可用下标：' + (f'0–{size-1}' if size else '无')
+    else:
+        text += '；节点类型：' + diagnostic['type']
+    return text[:400]
 
 
 def page_range(pages):
@@ -142,7 +161,9 @@ def tool_projection(root, research_id, item, *, fs=None):
         if output.get('compiled'): row['label'] = '编译并预览论文 PDF'
         row['warnings'] = [safe_diagnostic(root, warning) for warning in output.get('warnings', [])[:20] if isinstance(warning, str)]
     if item.get('error_type') or row['status'] in {'failed','error'}:
-        reason = safe_diagnostic(root, item.get('message')) if item.get('error_type') else ''
+        diagnostic = item.get('json_pointer_error')
+        reason = (json_pointer_diagnostic(root, diagnostic) if diagnostic is not None else
+                  safe_diagnostic(root, item.get('message')) if item.get('error_type') else '')
         row['message'] = reason or '未记录具体错误；已有产物保留，可查看执行输出。'
     elif item.get('message'):
         row['message'] = safe_diagnostic(root, item['message'])

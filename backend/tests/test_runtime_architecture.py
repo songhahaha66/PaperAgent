@@ -126,6 +126,30 @@ def test_asset_is_versioned_and_never_overwrites_a_previous_selection(tmp_path):
     asyncio.run(run())
 
 
+def test_asset_tool_description_and_validation_share_destination_rules(tmp_path):
+    from ai_system.modules.registry import capabilities, invoke
+    from ai_system.modules.writing.document import ASSET_DIRECTORIES, ASSET_SUFFIXES
+    ctx = context(tmp_path)
+    ctx.fs.write_text('outputs/example.png', 'source')
+    ctx.fs.register_file('outputs/example.png', kind='data', visibility='user')
+    capability = capabilities().get('writing.use_asset')
+    description = capability.inputs.model_json_schema()['properties']['destination']['description']
+    for name in ASSET_DIRECTORIES:
+        assert name+'/' in description and name+'/' in capability.purpose
+    for suffix in ASSET_SUFFIXES:
+        assert suffix in description and suffix in capability.purpose
+
+    async def run():
+        for destination in ('data/example.png', 'attachment/example.png', 'figures/example.exe', 'figures/../data/example.png'):
+            with pytest.raises(ValueError):
+                await invoke(ctx, 'writing.use_asset', source='outputs/example.png', destination=destination)
+        for destination in ('figures/example.png', 'tables/example.csv', 'paper-assets/example.py'):
+            result = await invoke(ctx, 'writing.use_asset', source='outputs/example.png', destination=destination)
+            assert result['path'] == destination and (tmp_path/destination).read_text() == 'source'
+        assert not (tmp_path/'data/example.png').exists() and not (tmp_path/'attachment/example.png').exists()
+    asyncio.run(run())
+
+
 def test_actual_pdf_pages_and_model_images_use_current_pdf(tmp_path):
     import pypdfium2 as pdfium
     from ai_system.modules.writing.document import PreviewInput,render_pages,tool_content
