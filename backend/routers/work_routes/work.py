@@ -58,11 +58,12 @@ async def get_works(
     limit: int = Query(100, ge=1, le=1000, description="返回记录数"),
     status: Optional[str] = Query(None, description="工作状态筛选"),
     search: Optional[str] = Query(None, description="搜索关键词"),
+    include_hidden: bool = Query(False, description="包含已隐藏项目，仍仅返回当前用户的项目"),
     db: Session = Depends(get_db),
     current_user: int = Depends(get_current_user)
 ):
     """获取用户的工作列表"""
-    response = crud.get_user_works(db, current_user, skip, limit, status, search)
+    response = crud.get_user_works(db, current_user, skip, limit, status, search, include_hidden)
     if isinstance(response, dict) and isinstance(response.get("works"), list):
         response["works"] = [_project_progress(work) for work in response["works"]]
     return response

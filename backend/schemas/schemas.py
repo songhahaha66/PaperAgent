@@ -161,6 +161,7 @@ class WorkCreate(WorkBase):
 
 class WorkUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    is_hidden: bool = False
     title: Optional[str] = None
     description: Optional[str] = None
     tags: Optional[str] = None
@@ -168,6 +169,7 @@ class WorkUpdate(BaseModel):
     output_mode: Optional[str] = None  # 输出模式：markdown, word, latex
 
 class WorkResponse(WorkBase):
+    is_hidden: bool = False
     architecture_version: int = 1
     execution_reason: Optional[dict] = None
     id: int

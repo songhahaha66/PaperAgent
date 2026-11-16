@@ -427,9 +427,11 @@ def get_work(db: Session, work_id: str):
 
 
 def get_user_works(db: Session, user_id: int, skip: int = 0, limit: int = 100,
-                   status: str = None, search: str = None):
+                   status: str = None, search: str = None, include_hidden: bool = False):
     """获取用户的工作列表，支持筛选和搜索"""
     query = db.query(models.Project).filter(models.Project.created_by == user_id)
+    if not include_hidden:
+        query = query.filter(models.Project.is_hidden.is_(False))
 
     # 状态筛选
     if status:
