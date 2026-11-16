@@ -24,7 +24,7 @@
     "test:messages": "node --experimental-vm-modules tests/jsonChatRenderer.test.cjs && node --experimental-vm-modules tests/conversationTimeline.test.cjs && node --experimental-vm-modules tests/conversationTool.test.cjs && node --experimental-vm-modules tests/conversationOperations.test.cjs && node --experimental-vm-modules tests/conversationStream.test.cjs && node --experimental-vm-modules tests/workSocket.test.cjs"
   },
   "dependencies": {
-    "@mdit/plugin-katex": "^1.1.5",
+    "@mdit/plugin-katex": "^1.2.0",
     "@simplewebauthn/browser": "^14.0.0",
     "docx-preview": "^0.4.1",
     "dompurify": "^3.4.17",
@@ -35,21 +35,21 @@
     "pinia": "^4.1.0",
     "pinia-plugin-persistedstate": "^4.7.1",
     "tdesign-icons-vue-next": "^0.4.12",
-    "tdesign-vue-next": "^1.20.10",
-    "vue": "^3.5.44",
-    "vue-i18n": "^11.4.17",
-    "vue-router": "^5.4.0"
+    "tdesign-vue-next": "^1.20.11",
+    "vue": "^3.5.45",
+    "vue-i18n": "^11.4.19",
+    "vue-router": "^5.5.1"
   },
   "devDependencies": {
-    "@tsconfig/node22": "^22.0.6",
+    "@tsconfig/node22": "^22.0.7",
     "@types/markdown-it": "^14.2.0",
     "@types/node": "^26.6.6",
-    "@vitejs/plugin-vue": "^6.0.10",
+    "@vitejs/plugin-vue": "^6.0.11",
     "@vue/tsconfig": "^0.9.1",
     "npm-run-all2": "^9.0.4",
-    "prettier": "3.9.10",
+    "prettier": "3.10.1",
     "typescript": "~6.0.3",
-    "vite": "^8.3.5",
+    "vite": "^8.3.8",
     "vite-plugin-vue-devtools": "^8.2.1",
     "vue-tsc": "^3.3.14"
   }
