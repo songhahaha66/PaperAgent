@@ -8,11 +8,14 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 import inspect
 import json
+import logging
 import time
 from uuid import uuid4
 from .context import CURRENT_TOOL, CURRENT_TURN, item_id, session_turn
 from .protocol import PlanItem, ToolItem
 from .projection import tool_projection, safe_diagnostic
+
+logger = logging.getLogger('ai_system.agent.tools')
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,17 @@ class ToolExecution:
         self.item.update(status=status, finished_at=self.metadata['finished_at'])
         return self.turn.put(self.snapshot(), 'item/completed', receipt=receipt)
 
+    def record_error(self, exc):
+        from ai_system.research.review_cache import error_detail
+        from ai_system.research.json_views import JsonPointerLookupError
+        detail = error_detail(exc)
+        self.metadata.update(error_type=type(exc).__name__, message=detail)
+        if isinstance(exc, JsonPointerLookupError):
+            self.metadata['json_pointer_error'] = exc.diagnostic
+        if self.item['type'] == 'plan':
+            self.item['explanation'] = safe_diagnostic(self.turn.store.root, detail)
+        return detail
+
 
 def update_tool(ctx, **changes):
     current = CURRENT_TOOL.get()
@@ -177,15 +191,16 @@ async def _reconcile(ctx, invocation):
     return ToolResult('复用已有运行 '+rid+'，未重放代码。状态：'+str(info.get('status','unknown'))+'\n'+output[-6000:], status=status)
 
 
-async def dispatch(ctx, invocation, handler):
+async def dispatch(ctx, invocation, handler, *, capture_errors=False, queued_at=None):
     """All model and scheduler calls enter here; raw helper calls stay internal."""
     if CURRENT_TURN.get() is None:
         research = getattr(ctx, 'research', None)
         with session_turn(ctx, (research.research_id if research else 'workspace')+'-lead'):
-            return await dispatch(ctx, invocation, handler)
+            return await dispatch(ctx, invocation, handler, capture_errors=capture_errors, queued_at=queued_at)
     turn = CURRENT_TURN.get()
     from ai_system.research.store import digest
-    from ai_system.research.runtime import execution_scope
+    from ai_system.config.generation import ModelGenerationLimit
+    from ai_system.research.runtime import ModelServiceError, RepeatedOperationBlocked, ResearchBudgetExhausted, execution_scope
     from ai_system.modules.registry import display_output
     signature = digest([invocation.name, invocation.arguments])
     limits = gates(ctx)
@@ -194,7 +209,11 @@ async def dispatch(ctx, invocation, handler):
     async with lock:
         turn.store.bind_call(turn.thread_id, invocation.call_id, signature)
         saved = turn.store.receipt(turn.thread_id, invocation.call_id, signature)
-        if saved is not None:return ToolResult(**saved)
+        if saved is not None:
+            if queued_at is not None:
+                logger.info('Tool %s call_id=%s queue_seconds=%.6f execution_seconds=0 recovered=true',
+                            invocation.name, invocation.call_id, time.monotonic()-queued_at)
+            return ToolResult(**saved)
         operation = ToolExecution(ctx, turn, invocation)
         existing = turn.store.get_item(operation.item['id'])
         if existing:
@@ -204,15 +223,27 @@ async def dispatch(ctx, invocation, handler):
         else:
             turn.put(operation.snapshot(), 'item/started')
         token = CURRENT_TOOL.set(operation)
+        started_at = None
         try:
             check_tool_access(ctx,invocation.name)
             async with limits.acquire(invocation.access):
+                started_at = time.monotonic()
                 with execution_scope(tool_call_id=invocation.call_id, parent_call_id=operation.item['id'],
                                      events=getattr(ctx,'events',None), research_id=getattr(getattr(ctx,'research',None),'research_id',None)):
                     result = await _reconcile(ctx, invocation)
                     if result is None:
-                        value = handler()
-                        result = _result(await value if inspect.isawaitable(value) else value)
+                        try:
+                            value = handler()
+                            if inspect.isawaitable(value):value = await value
+                        except (ModelGenerationLimit, ModelServiceError, RepeatedOperationBlocked, ResearchBudgetExhausted):
+                            raise
+                        except Exception as exc:
+                            # A delegated session owns recovery of its committed child work.
+                            if not capture_errors or invocation.access == 'delegate':raise
+                            detail = operation.record_error(exc)
+                            result = ToolResult(detail, status='failed', message=detail)
+                        else:
+                            result = _result(value)
                     if isinstance(result.value, dict):
                         operation.metadata['output'] = {**operation.metadata.get('output',{}), **display_output(invocation.name, result.value)}
                         for name in ('run_id','question_id','experiment_id'):
@@ -228,19 +259,19 @@ async def dispatch(ctx, invocation, handler):
                     operation.finish(result.status, receipt=(invocation.call_id, signature, asdict(result)))
                     return result
         except BaseException as exc:
-            from ai_system.research.review_cache import error_detail
-            from ai_system.research.json_views import JsonPointerLookupError
-            operation.metadata.update(error_type=type(exc).__name__, message=error_detail(exc))
-            if isinstance(exc, JsonPointerLookupError):
-                operation.metadata['json_pointer_error'] = exc.diagnostic
-            if operation.item['type']=='plan':operation.item['explanation']=safe_diagnostic(turn.store.root,error_detail(exc))
+            operation.record_error(exc)
             operation.finish('interrupted' if isinstance(exc, asyncio.CancelledError) else 'failed')
             raise
         finally:
             CURRENT_TOOL.reset(token)
+            if queued_at is not None:
+                finished_at = time.monotonic()
+                started = finished_at if started_at is None else started_at
+                logger.info('Tool %s call_id=%s queue_seconds=%.6f execution_seconds=%.6f',
+                            invocation.name, invocation.call_id, started-queued_at, finished_at-started)
 
 
-async def invoke(ctx, registry, name, arguments, *, call_id=None):
+async def invoke(ctx, registry, name, arguments, *, call_id=None, capture_errors=False, queued_at=None):
     capability = registry.get(name)
     from ai_system.research.runtime import CURRENT_EXECUTION
     # Explicit model call IDs survive checkpoints; scheduled actions use their
@@ -248,10 +279,10 @@ async def invoke(ctx, registry, name, arguments, *, call_id=None):
     call_id = call_id or CURRENT_EXECUTION.get().get('tool_call_id') or uuid4().hex
     access = 'delegate' if name == 'research.delegate' else capability.access if capability else 'write'
     return await dispatch(ctx, ToolInvocation(name, call_id, arguments, access),
-                          lambda: registry.execute(name, arguments, ctx))
+                          lambda: registry.execute(name, arguments, ctx), capture_errors=capture_errors, queued_at=queued_at)
 
 
-async def call_tool(ctx, call, handler, *, access='write'):
+async def call_tool(ctx, call, handler, *, access='write', queued_at=None):
     """Child/experiment tools share the same dispatcher and result formatting."""
     from langchain_core.messages import ToolMessage
     async def run():
@@ -260,7 +291,8 @@ async def call_tool(ctx, call, handler, *, access='write'):
             return ToolResult(message.content, status='failed' if message.status == 'error' else 'completed')
         return message
     try:
-        result = await dispatch(ctx, ToolInvocation(call['name'], call['id'], call.get('args') or {}, access), run)
+        result = await dispatch(ctx, ToolInvocation(call['name'], call['id'], call['args'], access), run,
+                                capture_errors=True, queued_at=queued_at)
         content = result.value if isinstance(result.value, (str,list)) else json.dumps(result.value, ensure_ascii=False)
         return ToolMessage(content=content, tool_call_id=call['id'], name=call['name'], status='success' if result.status == 'completed' else 'error')
     except (ValueError, KeyError, FileNotFoundError) as exc:

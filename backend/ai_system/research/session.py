@@ -31,7 +31,8 @@ async def run_research(ctx):
     if result['status'] in {'paused','waiting'}:
         import json
         store.set_outcome('blocked')
-        message=json.loads(result['messages'][-1].content)['message']
+        control=next(message for message in reversed(result['messages']) if not message.additional_kwargs.get('skipped'))
+        message=json.loads(control.content)['message']
         await ctx.set_stage('solve','blocked',message)
     from .control import public_snapshot
     refresh_registry(ctx)

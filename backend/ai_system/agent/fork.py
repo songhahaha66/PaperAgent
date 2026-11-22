@@ -88,7 +88,7 @@ def executor(ctx, tools, remember_run):
     declared={tool['function']['name'] for tool in tools}
     mapping={c.name.replace('.','_'):c.name for c in registry.model_capabilities()}
 
-    async def execute(call,*,recover_only=False):
+    async def execute(call,*,recover_only=False,queued_at=None):
         name=mapping.get(call['name'],call['name'])
         args=call.get('args') or {}
         key='fork-tool:'+CURRENT_TURN.get().thread_id+':'+call['_message_id']+':'+call['id']
@@ -114,7 +114,8 @@ def executor(ctx, tools, remember_run):
         capability=registry.get(name)
         try:
             with execution_scope(action_id=key):
-                result=await dispatch(ctx,ToolInvocation(name,key,args,capability.access if capability else 'write'),perform)
+                result=await dispatch(ctx,ToolInvocation(name,key,args,capability.access if capability else 'write'),
+                                      perform,queued_at=queued_at)
             content=result.value if isinstance(result.value,(str,list)) else json.dumps(result.value,ensure_ascii=False)
             return ToolMessage(content=content,tool_call_id=call['id'],name=call['name'],status='success' if result.status=='completed' else 'error')
         except (ValueError,KeyError,FileNotFoundError) as exc:
