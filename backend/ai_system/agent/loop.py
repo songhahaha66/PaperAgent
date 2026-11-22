@@ -1,7 +1,10 @@
 """The shared, durable model/tool loop for lead and child agents."""
 import asyncio
 import json
+import logging
 from dataclasses import dataclass, replace
+from itertools import groupby
+from time import monotonic
 from uuid import uuid4
 from contextvars import ContextVar
 from weakref import WeakValueDictionary
@@ -13,6 +16,7 @@ from .store import AgentStore
 
 MODEL_CALLBACKS=ContextVar('agent_model_callbacks',default=None)
 _owners=WeakValueDictionary()
+logger = logging.getLogger('ai_system.agent.tools')
 
 
 class NoResearchProgress(RuntimeError):pass
@@ -47,6 +51,11 @@ def observed_messages(messages):
     return messages
 
 
+def skipped_calls(calls, reason):
+    return [ToolMessage(content=reason, tool_call_id=call['id'], name=call['name'],
+                        status='error', additional_kwargs={'skipped': True}) for call in calls]
+
+
 class AgentLoop:
     def __init__(self, model, tools, system_prompt, *, ctx, context=None, prepare=None,
                  execute=None, finish=None):
@@ -54,10 +63,12 @@ class AgentLoop:
         self.ctx,self.context=ctx,context
         self.prepare,self.execute,self.finish=prepare,execute,finish
         self.tool_map={tool.name:tool for tool in tools if hasattr(tool,'name')}
+        self.parallel_tools = {name for name, tool in self.tool_map.items()
+                               if (getattr(tool, 'metadata', None) or {}).get('access') == 'read'}
 
-    async def _execute(self, call, *, recover_only=False):
+    async def _execute(self, call, *, recover_only=False, queued_at=None):
         if self.execute:
-            return await self.execute(call,recover_only=recover_only)
+            return await self.execute(call, recover_only=recover_only, queued_at=queued_at)
         from .runtime import call_tool, recover_tool
         tool=self.tool_map.get(call['name'])
         native={**call,'id':call['_message_id']+':'+call['id']}
@@ -68,8 +79,31 @@ class AgentLoop:
                                tool_call_id=call['id'],name=call['name'],status='error')
         if tool is None:
             return ToolMessage(content='未知工具：'+call['name'],tool_call_id=call['id'],name=call['name'],status='error')
-        result=await call_tool(self.ctx,native,lambda:tool.ainvoke(call['args']))
+        access = 'read' if call['name'] in self.parallel_tools else 'write'
+        result=await call_tool(self.ctx,native,lambda:tool.ainvoke(call['args']),access=access,queued_at=queued_at)
         return result.model_copy(update={'tool_call_id':call['id']})
+
+    async def _run_batch(self, store, session, history, calls):
+        queued_at = monotonic()
+        try:
+            for parallel, group in groupby(calls, key=lambda call: call['name'] in self.parallel_tools):
+                if parallel:
+                    # ToolGates admits four readers and advances waiting calls as slots free up.
+                    async with asyncio.TaskGroup() as tasks:
+                        pending = [tasks.create_task(self._execute(call, queued_at=queued_at)) for call in group]
+                    results = [task.result() for task in pending]
+                    store.append_messages(session, results)
+                    history.extend(results)
+                    continue
+                for call in group:
+                    result = await self._execute(call, queued_at=queued_at)
+                    if result.additional_kwargs.get('agent_stop'):
+                        return call, result
+                    store.append_message(session, result)
+                    history.append(result)
+        finally:
+            logger.info('Tool batch session=%s message_id=%s calls=%d wall_seconds=%.6f',
+                        session, calls[0]['_message_id'], len(calls), monotonic()-queued_at)
 
     async def run(self, session, messages, *, on_resume=None, new_user_turn_id=None):
         key=(str(self.ctx.research.root),session)
@@ -86,15 +120,22 @@ class AgentLoop:
         store=AgentStore(self.ctx.research.root)
         history=store.messages(session)
         resumed=bool(history)
-        if resumed and on_resume:on_resume(bool(pending_calls(history)))
         seen={message.id for message in history}
         incoming=[message for message in (messages[-1:] if resumed else messages) if not message.id or message.id not in seen]
         saved=store.session(session)
+        pending = pending_calls(history)
+        if pending and saved and saved['status'] in {'paused', 'waiting'}:
+            # Older sessions left the remainder of a stopped batch pending.
+            skipped = skipped_calls(pending, '已暂停或等待用户输入，本次后续调用未执行。')
+            store.append_messages(session, skipped)
+            history.extend(skipped)
+            pending = []
+        if resumed and on_resume:on_resume(bool(pending))
         if resumed and not incoming and saved and saved['status']=='completed':
             return {'messages':history,'status':'completed'}
         self.ctx.agent_messages=observed_messages(history)
         if resumed and incoming:
-            for call in pending_calls(history):
+            for call in pending:
                 result=await self._execute(call,recover_only=True)
                 store.append_message(session,result);history.append(result)
         for message in incoming:
@@ -119,24 +160,26 @@ class AgentLoop:
                 if done:return done
             while True:
                 self.ctx.agent_messages=observed_messages(history)
-                for call in pending_calls(history):
+                calls = pending_calls(history)
+                if calls:
                     last_finish_feedback=None
-                    result=await self._execute(call)
-                    store.append_message(session,result);history.append(result)
-                    stop=result.additional_kwargs.get('agent_stop')
-                    if stop=='complete':
-                        for remaining in pending_calls(history):
-                            skipped=ToolMessage(content='已申请结束，本次后续调用未执行。',tool_call_id=remaining['id'],name=remaining['name'],status='error')
-                            store.append_message(session,skipped);history.append(skipped)
-                        response=AIMessage(content=call['args'].get('reason') or call['args'].get('title') or '交付文件已保存。')
-                        store.append_message(session,response);history.append(response)
-                        done=await complete(response)
-                        if done:return done
-                        break
-                    if stop:
-                        store.set_session(session,stop,result.content)
-                        return {'messages':history,'status':stop}
-                if pending_calls(history):continue
+                    stopped = await self._run_batch(store, session, history, calls)
+                    if stopped:
+                        call, result = stopped
+                        stop = result.additional_kwargs['agent_stop']
+                        remaining = calls[calls.index(call)+1:]
+                        if stop == 'complete':
+                            skipped = skipped_calls(remaining, '已申请结束，本次后续调用未执行。')
+                            response = AIMessage(content=call['args'].get('reason') or call['args'].get('title') or '交付文件已保存。')
+                            store.append_messages(session, [result, *skipped, response])
+                            history.extend([result, *skipped, response])
+                            done = await complete(response)
+                            if done:return done
+                        else:
+                            skipped = skipped_calls(remaining, '已暂停或等待用户输入，本次后续调用未执行。')
+                            store.append_messages(session, [result, *skipped], status=stop, reason=result.content)
+                            history.extend([result, *skipped])
+                            return {'messages': history, 'status': stop}
                 seen={message.id for message in history}
                 for message in list(history):
                     diagnostic=message.additional_kwargs.get('tool_diagnostic') if isinstance(message,AIMessage) else None

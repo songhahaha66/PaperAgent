@@ -161,7 +161,8 @@ class Planner:
         for capability in sorted(registry.model_capabilities(),key=lambda c:c.name):
             name=capability.name.replace('.','_');mapping[name]=capability.name
             async def call(_name=capability.name,**kwargs):return await registry.execute(_name,kwargs,ctx)
-            tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,coroutine=call))
+            tools.append(StructuredTool(name=name,description=capability.purpose,args_schema=capability.inputs,
+                                        coroutine=call,metadata={'access':capability.access}))
         user_turn=context.get('user_message')
         manuscript_edited=bool(user_turn and user_turn.get('manuscript_edited'))
         def user_content():
@@ -175,7 +176,7 @@ class Planner:
             if user_turn.get('previous_turn'):text+='\n尚未完成的请求：'+user_turn['previous_turn']['message']
             return text
         failed_export=None
-        async def execute(call,*,recover_only=False):
+        async def execute(call,*,recover_only=False,queued_at=None):
             nonlocal manuscript_edited,failed_export
             name=call['name'];args=call['args']
             key='research-tool:'+ctx.research.research_id+':'+str(call.get('_message_id','finish'))+':'+call['id']
@@ -194,14 +195,16 @@ class Planner:
                 if source==failed_export:raise NoResearchProgress('正文与诊断没有变化，停止重复交付；草稿和日志已保存。')
             try:
                 with execution_scope(action_id=key,observation_id=observation_id):
-                    outcome=await invoke_tool(ctx,registry,native['name'],args,call_id=key)
+                    outcome=await invoke_tool(ctx,registry,native['name'],args,call_id=key,
+                                              capture_errors=True,queued_at=queued_at)
                 result=outcome.value
-                if exporting and (outcome.status!='completed' or any(result.get(key) for key in ('issues','research_blocked','artifact_conflict'))):failed_export=source
-                if name=='writing_edit':manuscript_edited=True
+                if exporting and outcome.kind is not None and (outcome.status!='completed' or any(result.get(key) for key in ('issues','research_blocked','artifact_conflict'))):failed_export=source
+                if name=='writing_edit' and outcome.kind is not None:manuscript_edited=True
                 control=result.get('control') if isinstance(result,dict) else None
                 if name=='research_deliver' and outcome.status=='completed' and not any(result.get(key) for key in ('issues','research_blocked','artifact_conflict')):
                     control='complete'
-                return ToolMessage(content=json.dumps(result,ensure_ascii=False,default=str),tool_call_id=call['id'],name=name,
+                content=result if isinstance(result,str) else json.dumps(result,ensure_ascii=False,default=str)
+                return ToolMessage(content=content,tool_call_id=call['id'],name=name,
                     status='success' if outcome.status=='completed' else 'error',
                     additional_kwargs={'agent_stop':control} if control else {})
             except (ValueError,KeyError,FileNotFoundError) as exc:

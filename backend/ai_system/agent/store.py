@@ -57,17 +57,27 @@ class AgentStore:
         return json.loads(row[0]) if row else None
 
     def append_message(self, session, message):
+        self.append_messages(session, [message])
+
+    def append_messages(self, session, messages, *, status=None, reason=None):
         from langchain_core.messages import message_to_dict
         from uuid import uuid4
-        if not message.id:message.id=uuid4().hex
         with self.transaction() as db:
-            db.execute('INSERT OR IGNORE INTO session_messages(session_id,id,payload) VALUES (?,?,?)',
-                       (session,message.id,json.dumps(message_to_dict(message),ensure_ascii=False)))
+            for message in messages:
+                if not message.id:message.id=uuid4().hex
+                db.execute('INSERT OR IGNORE INTO session_messages(session_id,id,payload) VALUES (?,?,?)',
+                           (session,message.id,json.dumps(message_to_dict(message),ensure_ascii=False)))
+            if status is not None:
+                self._set_session(db, session, status, reason)
 
     def set_session(self, session, status, reason=None):
         with self.transaction() as db:
-            db.execute('INSERT INTO sessions VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,reason=excluded.reason',
-                       (session,status,reason))
+            self._set_session(db, session, status, reason)
+
+    @staticmethod
+    def _set_session(db, session, status, reason):
+        db.execute('INSERT INTO sessions VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,reason=excluded.reason',
+                   (session,status,reason))
 
     def session(self, session):
         with closing(self.connect()) as db:
