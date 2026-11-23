@@ -5,43 +5,43 @@ description = "PaperAgent Backend API"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "fastapi>=0.162.0",
+    "fastapi>=0.165.0",
     "uvicorn[standard]>=0.54.0",
-    "httpx2>=2.16.0",
+    "httpx2>=2.16.2",
     "python-jose[cryptography]>=3.5.0",
     "bcrypt>=5.0.0",
-    "python-multipart>=0.0.33",
-    "sqlalchemy>=2.1.6",
-    "psycopg[binary]>=3.3.8",
+    "python-multipart>=0.0.34",
+    "sqlalchemy>=2.1.9",
+    "psycopg[binary]>=3.3.9",
     "aiosqlite>=0.22.1",
     "python-dotenv>=1.2.4",
-    "pydantic[email]>=2.14.3",
+    "pydantic[email]>=2.14.4",
     "pytest>=9.2.0",
-    "numpy>=2.5.4",
+    "numpy>=2.5.5",
     "matplotlib>=3.11.2",
     "scipy>=1.18.1",
-    "pandas>=3.1.0",
+    "pandas>=3.1.1",
     "seaborn>=0.13.2",
     "alembic>=1.20.1",
     "python-docx>=1.2.0",
     "Pillow>=12.3.0",
     "pdfplumber>=0.11.10",
     "openpyxl>=3.1.5",
-    "langchain-core>=1.4.0",
-    "langchain-openai>=1.7.3",
-    "langchain-anthropic>=1.7.7",
-    "langchain-google-genai>=4.4.2",
+    "langchain-core>=1.8.4",
+    "langchain-openai>=1.8.5",
+    "langchain-anthropic>=1.7.12",
+    "langchain-google-genai>=4.5.2",
     "webauthn>=3.0.1",
     "scikit-learn>=1.9.1",
     "defusedxml>=0.7.1",
-    "langsmith>=0.8.18",
-    "pypdfium2>=5.14.0",
+    "langsmith>=0.15.1",
+    "pypdfium2>=5.15.2",
 ]
 
 [project.optional-dependencies]
 sandbox = [
     "opensandbox-code-interpreter==1.1.1",
-    "opensandbox==1.2.0",
+    "opensandbox==1.2.1",
 ]
 
 [tool.uv.workspace]
